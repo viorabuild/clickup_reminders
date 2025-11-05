@@ -16,11 +16,11 @@
 
 #### Секрет 1: TELEGRAM_BOT_TOKEN
 - **Name:** `TELEGRAM_BOT_TOKEN`
-- **Value:** `7638513608:AAGsZqML_dYnOtwCSV22AL13Glm4hI21WIY`
+- **Value:** `<YOUR_TELEGRAM_BOT_TOKEN>`
 
 #### Секрет 2: TELEGRAM_CHAT_ID
 - **Name:** `TELEGRAM_CHAT_ID`
-- **Value:** `-1003069541143`
+- **Value:** `<YOUR_TELEGRAM_CHAT_ID>`
 
 ### 3. Проверьте список секретов
 

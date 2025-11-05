@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import requests
 
@@ -31,10 +31,59 @@ class ClickUpClient:
         if not resolved_list_id:
             return []
 
-        response = self.session.get(f"{self.BASE_URL}/list/{resolved_list_id}/task")
-        response.raise_for_status()
-        payload = response.json()
-        tasks = payload.get("tasks", [])
+        return self._fetch_list_tasks(str(resolved_list_id))
+
+    def fetch_tasks_by_tags(self, tags: Sequence[str]) -> List[Dict[str, Any]]:
+        """Collect tasks across the workspace using ClickUp's tag filter."""
+
+        unique_tags: List[str] = []
+        seen: set[str] = set()
+        for tag in tags:
+            if tag is None:
+                continue
+            candidate = str(tag).strip()
+            if not candidate:
+                continue
+            candidate = candidate.lstrip("#")
+            normalized = candidate.casefold()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_tags.append(candidate)
+
+        if not unique_tags:
+            return []
+
+        tasks: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        page = 0
+        while True:
+            params = [("page", page)] + [("tags[]", tag) for tag in unique_tags]
+            response = self.session.get(
+                f"{self.BASE_URL}/team/{self.team_id}/task", params=params
+            )
+            response.raise_for_status()
+            payload = response.json() or {}
+            chunk = payload.get("tasks") or []
+
+            appended = False
+            for task in chunk:
+                if not isinstance(task, dict):
+                    continue
+                task_id_raw = task.get("id")
+                task_id = str(task_id_raw) if task_id_raw is not None else ""
+                if not task_id or task_id in seen_ids:
+                    continue
+                seen_ids.add(task_id)
+                tasks.append(task)
+                appended = True
+
+            has_more = bool(payload.get("has_more"))
+            if not has_more or not appended:
+                break
+            page += 1
+
         return tasks
 
     def fetch_task(self, task_id: str) -> Dict[str, Any]:
@@ -83,3 +132,10 @@ class ClickUpClient:
         response.raise_for_status()
         payload = response.json()
         return payload.get("lists", [])
+
+    def _fetch_list_tasks(self, list_id: str) -> List[Dict[str, Any]]:
+        response = self.session.get(f"{self.BASE_URL}/list/{list_id}/task")
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("tasks", [])
+

@@ -1,6 +1,7 @@
 {
   "clickup_workspace_id": "<your_workspace_id>",
   "reminder_list_name": "Напоминания",
+  "reminder_tag": "#напоминание",
   "phone_mapping": {
     "Alex": "+10000000000"
   },
@@ -14,6 +15,10 @@
   "telegram": {
     "enabled": true,
     "chat_id": "<your_chat_id_or_group_id>",
+    "assignee_chat_ids": {
+      "Alex": "<telegram_chat_id_for_alex>",
+      "Eve": "<telegram_chat_id_for_eve>"
+    },
     "notifications": {
       "task_reminders": true,
       "status_updates": true,

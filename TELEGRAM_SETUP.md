@@ -44,6 +44,7 @@
 {
   "clickup_workspace_id": "your_workspace_id",
   "reminder_list_name": "Напоминания",
+  "reminder_tag": "#напоминание",
   "phone_mapping": {
     "Alex": "+1234567890"
   },
@@ -54,6 +55,10 @@
   "telegram": {
     "enabled": true,
     "chat_id": "123456789",
+    "assignee_chat_ids": {
+      "Alex": "111111111",
+      "Eve": "222222222"
+    },
     "notifications": {
       "task_reminders": true,
       "status_updates": true,
@@ -68,12 +73,15 @@
 **Параметры:**
 - `enabled` - включить/выключить Telegram уведомления
 - `chat_id` - ID чата или группы для отправки уведомлений
+- `assignee_chat_ids` - словарь "Имя исполнителя" → "Chat ID" для персональных напоминаний (опционально)
 - `notifications` - настройка типов уведомлений:
   - `task_reminders` - напоминания о задачах
   - `status_updates` - обновления статусов задач
   - `call_notifications` - уведомления о звонках
   - `sms_notifications` - уведомления об отправке SMS
   - `errors` - уведомления об ошибках
+
+В корне секции ClickUp добавлен параметр `reminder_tag`. Он указывает, какой тег в ClickUp нужно использовать для напоминаний. По умолчанию система ищет тег `#напоминание` во всех пространствах и отправляет задачи с этим тегом в Telegram. Если укажете собственный тег (строку или список строк), бот соберёт задачи по нему и только при отсутствии таких задач вернётся к списку `reminder_list_name`.
 
 #### 3.2. Обновите `secrets.json`
 

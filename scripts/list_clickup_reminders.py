@@ -185,22 +185,66 @@ def main() -> int:
         or "Напоминания"  # Значение по умолчанию
     )
 
+    def collect_tags(config: Dict[str, Any]) -> List[str]:
+        tags: List[str] = []
+
+        def _extend(value: Any) -> None:
+            if not value:
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    _extend(item)
+                return
+            if isinstance(value, str):
+                candidate = value.strip()
+            else:
+                candidate = str(value).strip()
+            if candidate and candidate not in tags:
+                tags.append(candidate)
+
+        clickup_cfg = config.get("clickup", {})
+        _extend(clickup_cfg.get("reminder_tag"))
+        _extend(clickup_cfg.get("reminder_tags"))
+        _extend(config.get("reminder_tag"))
+        _extend(config.get("reminder_tags"))
+
+        if not tags:
+            tags.append("#напоминание")
+
+        return tags
+
+    reminder_tags = collect_tags(cfg)
+
     # Ensure the ClickUp team id is valid for this token.
     team_id = resolve_team_id(api_key, team_id) or team_id  # Проверяем, что ID команды актуален
 
     client = ClickUpClient(api_key=api_key, team_id=team_id)  # Создаем клиента ClickUp
 
+    tasks: List[Dict[str, Any]] = []
+
     try:
-        tasks: List[Dict[str, Any]] = client.fetch_tasks(list_name)  # Получаем задачи из нужного списка
+        if reminder_tags:
+            tasks = client.fetch_tasks_by_tags(reminder_tags)
     except Exception as e:
-        print(f"ClickUp API error: {e}", file=sys.stderr)  # Сообщаем об ошибке запроса к ClickUp
+        print(f"ClickUp API error while fetching tags {reminder_tags}: {e}", file=sys.stderr)
         return 1
 
     if not tasks:
-        print(f"No tasks found in list '{list_name}'.")  # Сообщаем, что задач нет
+        try:
+            tasks = client.fetch_tasks(list_name)
+        except Exception as e:
+            print(f"ClickUp API error: {e}", file=sys.stderr)  # Сообщаем об ошибке запроса к ClickUp
+            return 1
+
+    if not tasks:
+        print(
+            f"No tasks with tags {', '.join(reminder_tags)} and no tasks in list '{list_name}'."
+        )  # Сообщаем, что задач нет
         return 0
 
-    print(f"Reminders in '{list_name}':")  # Шапка списка напоминаний
+    print(
+        f"Reminders for tags {', '.join(reminder_tags)} (fallback list '{list_name}'):"
+    )  # Шапка списка напоминаний
     for t in tasks:  # Проходим по каждой задаче
         task_id = t.get("id")  # ID задачи в ClickUp
         name = t.get("name")  # Название задачи
