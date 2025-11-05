@@ -451,7 +451,8 @@ class TelegramReminderService:
         callback_id = callback.get("id")
         message = callback.get("message") or {}
         chat = message.get("chat") or {}
-        chat_id = str(chat.get("id"))
+        raw_chat_id = chat.get("id")
+        chat_id = str(raw_chat_id) if raw_chat_id is not None else ""
         message_id = message.get("message_id")
 
         if not data.startswith("s:") or data.count(":") != 2:
@@ -465,6 +466,10 @@ class TelegramReminderService:
             if callback_id:
                 self.answer_callback(callback_id, "Действие не поддерживается", show_alert=True)
             return
+
+        if chat_id:
+            self.default_chat_id = chat_id
+            self._persist_chat_id(chat_id)
 
         ack_sent = False
         if callback_id:
@@ -495,11 +500,18 @@ class TelegramReminderService:
                     )
             return
 
-        if chat_id and message_id:
+        if not chat_id:
+            chat_id = self._resolve_target_chat()
+
+        if raw_chat_id is not None and chat_id and message_id:
             try:
                 self.remove_inline_keyboard(chat_id, message_id)
             except Exception as exc:  # pragma: no cover - best effort
                 LOGGER.debug("Failed to clear inline keyboard for message %s: %s", message_id, exc)
+
+        if not chat_id:
+            LOGGER.warning("No chat id available to notify about task %s update", task_id)
+            return
 
         task_payload = self.fetch_task_details(task_id)
         task_name = task_payload.get("name", f"Задача {task_id}")

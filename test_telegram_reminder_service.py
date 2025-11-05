@@ -85,7 +85,9 @@ class TelegramReminderServiceTest(unittest.TestCase):
 
         with patch.object(service, "update_clickup_status") as update_status, patch.object(
             service, "fetch_task_details", return_value={"name": "Demo task"}
-        ), patch.object(service, "answer_callback", wraps=service.answer_callback) as answer_cb:
+        ), patch.object(service, "answer_callback", wraps=service.answer_callback) as answer_cb, patch.object(
+            service, "_persist_chat_id"
+        ):
             callback = {
                 "id": "cb-1",
                 "data": "s:task-pending:d",
@@ -104,6 +106,30 @@ class TelegramReminderServiceTest(unittest.TestCase):
         self.assertIn("Demo task", send_payload["text"])
         self.assertIn("ВЫПОЛНЕНО", send_payload["text"])
         answer_cb.assert_called_once()
+
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_handle_callback_without_chat_uses_default(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        service = TelegramReminderService(self.config, self.credentials, session=session)
+
+        with patch.object(service, "update_clickup_status") as update_status, patch.object(
+            service, "fetch_task_details", return_value={"name": "Demo task"}
+        ), patch.object(service, "answer_callback", wraps=service.answer_callback) as answer_cb, patch.object(
+            service, "_persist_chat_id"
+        ):
+            callback = {
+                "id": "cb-2",
+                "data": "s:task-pending:d",
+                "message": {"message_id": 55},
+            }
+            service.handle_callback(callback)
+
+        update_status.assert_called_once_with("task-pending", "ВЫПОЛНЕНО")
+        answer_cb.assert_called_once()
+
+        send_payload = next(call["json"] for call in session.calls if call["url"].endswith("sendMessage"))
+        self.assertEqual("42", send_payload["chat_id"])
 
 
 if __name__ == "__main__":
