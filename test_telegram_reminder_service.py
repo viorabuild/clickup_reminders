@@ -179,6 +179,111 @@ class TelegramReminderServiceTest(unittest.TestCase):
         payloads = [call["json"] for call in session.calls if call["url"].endswith("sendMessage")]
         self.assertTrue(any("Не удалось обновить задачу" in payload["text"] for payload in payloads))
 
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_send_reminders_routes_by_assignee(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        config = {
+            "clickup": {
+                "status_mapping": {
+                    "ВЫПОЛНЕНО": "complete",
+                    "НЕ_ВЫПОЛНЕНО": "todo",
+                    "В_РАБОТЕ": "in progress",
+                },
+                "completed_status": "complete",
+            },
+            "working_hours": {"timezone": "Europe/Lisbon"},
+            "telegram": {
+                "assignee_chat_map": {
+                    "Alex": "chat-alex",
+                    "Eve|Ева": ["chat-eve-1", "chat-eve-2"],
+                }
+            },
+        }
+        credentials = {
+            "clickup_api_key": "key",
+            "clickup_team_id": "123",
+            "telegram_bot_token": "token",
+            "telegram_chat_id": "fallback-chat",
+        }
+
+        service = TelegramReminderService(config, credentials, session=session)
+        tasks = [
+            ReminderTask(task_id="1", name="Task Alex", status="todo", due_human="2024-01-01 10:00", assignee="Alex", url="url-1"),
+            ReminderTask(task_id="2", name="Task Eve", status="todo", due_human="2024-01-02 10:00", assignee="Ева", url="url-2"),
+            ReminderTask(task_id="3", name="Task Unknown", status="todo", due_human="2024-01-03 10:00", assignee="—", url="url-3"),
+        ]
+
+        with patch.object(service, "fetch_pending_tasks", return_value=tasks):
+            service.send_reminders()
+
+        send_calls = [call for call in session.calls if call["url"].endswith("sendMessage")]
+        messages_by_chat: dict[str, list[str]] = {}
+        for call in send_calls:
+            chat = call["json"]["chat_id"]
+            messages_by_chat.setdefault(chat, []).append(call["json"]["text"])
+
+        expected_chats = {"chat-alex", "chat-eve-1", "chat-eve-2", "fallback-chat"}
+        self.assertEqual(set(messages_by_chat.keys()), expected_chats)
+
+        for chat_id in expected_chats:
+            self.assertGreaterEqual(len(messages_by_chat[chat_id]), 1)
+
+        self.assertEqual(len(messages_by_chat["chat-alex"]), 2)
+        self.assertIn("Task Alex", messages_by_chat["chat-alex"][1])
+
+        self.assertEqual(len(messages_by_chat["chat-eve-1"]), 2)
+        self.assertIn("Task Eve", messages_by_chat["chat-eve-1"][1])
+
+        self.assertEqual(len(messages_by_chat["chat-eve-2"]), 2)
+        self.assertIn("Task Eve", messages_by_chat["chat-eve-2"][1])
+
+        self.assertEqual(len(messages_by_chat["fallback-chat"]), 2)
+        self.assertIn("Task Unknown", messages_by_chat["fallback-chat"][1])
+
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_send_reminders_broadcast_all_when_overridden(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        config = {
+            "clickup": {
+                "status_mapping": {
+                    "ВЫПОЛНЕНО": "complete",
+                    "НЕ_ВЫПОЛНЕНО": "todo",
+                    "В_РАБОТЕ": "in progress",
+                },
+                "completed_status": "complete",
+            },
+            "working_hours": {"timezone": "Europe/Lisbon"},
+        }
+        credentials = {
+            "clickup_api_key": "key",
+            "clickup_team_id": "123",
+            "telegram_bot_token": "token",
+            "telegram_chat_id": "fallback-chat",
+        }
+
+        service = TelegramReminderService(config, credentials, session=session)
+        tasks = [
+            ReminderTask(task_id="1", name="Task Alex", status="todo", due_human="2024-01-01 10:00", assignee="Alex", url="url-1"),
+            ReminderTask(task_id="2", name="Task Eve", status="todo", due_human="2024-01-02 10:00", assignee="Ева", url="url-2"),
+        ]
+
+        with patch.object(service, "fetch_pending_tasks", return_value=tasks):
+            service.send_reminders(chat_id="custom-chat", broadcast_all=True)
+
+        send_calls = [call for call in session.calls if call["url"].endswith("sendMessage")]
+        messages_by_chat: dict[str, list[str]] = {}
+        for call in send_calls:
+            chat = call["json"]["chat_id"]
+            messages_by_chat.setdefault(chat, []).append(call["json"]["text"])
+
+        self.assertEqual(set(messages_by_chat.keys()), {"custom-chat"})
+        # Expect one preface + len(tasks) messages
+        self.assertEqual(len(messages_by_chat["custom-chat"]), 1 + len(tasks))
+        self.assertIn("Task Alex", " ".join(messages_by_chat["custom-chat"]))
+        self.assertIn("Task Eve", " ".join(messages_by_chat["custom-chat"]))
+
 
 if __name__ == "__main__":
     unittest.main()

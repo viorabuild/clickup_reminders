@@ -199,8 +199,17 @@ class TelegramReminderService:
             team_id=str(credentials["clickup_team_id"]),
         )
 
+        self.clickup_config = self.config.get("clickup", {}) or {}
         self.status_mapping = self._build_status_mapping()
         self.completed_statuses = self._build_completed_statuses()
+        self.reminder_tags = self._resolve_reminder_tags()
+        self.reminders_list_id = self.clickup_config.get("list_id") or self.config.get("clickup_list_id")
+        self.reminders_list_name = (
+            self.clickup_config.get("reminders_list_name")
+            or self.config.get("reminder_list_name")
+            or "Напоминания"
+        )
+        self.assignee_chat_map = self._build_assignee_chat_map()
         tz_name = config.get("working_hours", {}).get("timezone") or "UTC"
         self.timezone_name = tz_name
 
@@ -211,7 +220,7 @@ class TelegramReminderService:
         return cls(config=config, credentials=credentials)
 
     def _build_status_mapping(self) -> Dict[str, str]:
-        clickup_section = self.config.get("clickup", {})
+        clickup_section = self.clickup_config
         mapping = {key.upper(): value for key, value in clickup_section.get("status_mapping", {}).items()}
         mapping.setdefault("ВЫПОЛНЕНО", clickup_section.get("completed_status", "complete"))
         mapping.setdefault("НЕ_ВЫПОЛНЕНО", clickup_section.get("pending_status", "to do"))
@@ -220,13 +229,81 @@ class TelegramReminderService:
 
     def _build_completed_statuses(self) -> set[str]:
         statuses = {self.status_mapping.get("ВЫПОЛНЕНО", "complete").lower()}
-        clickup_section = self.config.get("clickup", {})
-        completed = clickup_section.get("completed_status")
+        completed = self.clickup_config.get("completed_status")
         if completed:
             statuses.add(str(completed).lower())
         statuses.add("complete")
         statuses.add("done")
         return statuses
+
+    def _resolve_reminder_tags(self) -> List[str]:
+        tags_cfg = (
+            self.clickup_config.get("reminder_tags")
+            or self.clickup_config.get("reminder_tag")
+            or self.config.get("reminder_tags")
+            or self.config.get("reminder_tag")
+        )
+
+        if isinstance(tags_cfg, str):
+            raw_tags: Iterable[str] = (tags_cfg,)
+        elif isinstance(tags_cfg, (list, tuple, set)):
+            raw_tags = (str(tag) for tag in tags_cfg)
+        else:
+            raw_tags = ()
+
+        tags: List[str] = []
+        seen: set[str] = set()
+        for candidate in raw_tags:
+            normalized = str(candidate).strip()
+            if not normalized or normalized in seen:
+                continue
+            tags.append(normalized)
+            seen.add(normalized)
+        return tags
+
+    def _build_assignee_chat_map(self) -> Dict[str, Tuple[str, ...]]:
+        telegram_cfg = self.config.get("telegram") or {}
+        mapping_cfg = telegram_cfg.get("assignee_chat_map") or telegram_cfg.get("assignee_chats") or {}
+        if not isinstance(mapping_cfg, dict):
+            return {}
+
+        result: Dict[str, Tuple[str, ...]] = {}
+        for raw_name, raw_chat_ids in mapping_cfg.items():
+            if raw_name is None:
+                continue
+
+            if isinstance(raw_name, str):
+                name_candidates = [part.strip() for part in raw_name.split("|") if part.strip()]
+            else:
+                name_candidates = [str(raw_name).strip()]
+
+            if not name_candidates:
+                continue
+
+            if isinstance(raw_chat_ids, (list, tuple, set)):
+                chat_iterable = raw_chat_ids
+            else:
+                chat_iterable = (raw_chat_ids,)
+
+            chats: List[str] = []
+            seen_chat: set[str] = set()
+            for chat in chat_iterable:
+                chat_str = str(chat).strip()
+                if not chat_str or chat_str in seen_chat:
+                    continue
+                chats.append(chat_str)
+                seen_chat.add(chat_str)
+
+            if not chats:
+                continue
+
+            chat_tuple = tuple(chats)
+            for name in name_candidates:
+                normalized = self._normalize_assignee_name(name)
+                if normalized:
+                    result[normalized] = chat_tuple
+
+        return result
 
     def _load_cached_chat_id(self) -> Optional[str]:
         try:
@@ -255,30 +332,44 @@ class TelegramReminderService:
             return cached
         return None
 
+    def _ensure_default_chat(self, chat_id: str) -> None:
+        if not self.default_chat_id:
+            self.default_chat_id = chat_id
+            self._persist_chat_id(chat_id)
+
+    @staticmethod
+    def _normalize_assignee_name(name: str) -> str:
+        normalized = str(name or "").strip().lower()
+        if not normalized:
+            return ""
+        return " ".join(normalized.split())
+
+    def _chat_targets_for_task(self, task: ReminderTask) -> Tuple[str, ...]:
+        assignee = self._normalize_assignee_name(task.assignee)
+        if not assignee:
+            return ()
+
+        direct_mapping = self.assignee_chat_map.get(assignee)
+        if direct_mapping:
+            return direct_mapping
+
+        if "(" in assignee:
+            trimmed = assignee.split("(", 1)[0].strip()
+            if trimmed and trimmed in self.assignee_chat_map:
+                return self.assignee_chat_map[trimmed]
+
+        return ()
+
     # --------------------------------------------------------------------- #
     # ClickUp helpers
     # --------------------------------------------------------------------- #
     def fetch_pending_tasks(self, limit: Optional[int] = None) -> List[ReminderTask]:
         """Return tasks from ClickUp that match the reminder filters and are not completed."""
-        clickup_cfg = self.config.get("clickup", {})
-
-        tags_cfg = (
-            clickup_cfg.get("reminder_tags")
-            or clickup_cfg.get("reminder_tag")
-            or self.config.get("reminder_tags")
-            or self.config.get("reminder_tag")
-        )
-        reminder_tags: List[str] = []
-        if isinstance(tags_cfg, str):
-            reminder_tags = [tags_cfg]
-        elif isinstance(tags_cfg, (list, tuple)):
-            reminder_tags = [str(tag) for tag in tags_cfg if str(tag).strip()]
-
         tasks_raw: List[Dict[str, Any]] = []
         try:
-            if reminder_tags:
+            if self.reminder_tags:
                 seen_ids: set[str] = set()
-                for tag in reminder_tags:
+                for tag in self.reminder_tags:
                     for task in self.clickup_client.fetch_tasks_by_tag(tag):
                         task_id = str(task.get("id") or "").strip()
                         if not task_id or task_id in seen_ids:
@@ -286,15 +377,9 @@ class TelegramReminderService:
                         tasks_raw.append(task)
                         seen_ids.add(task_id)
             else:
-                list_id = clickup_cfg.get("list_id") or self.config.get("clickup_list_id")
-                list_name = (
-                    clickup_cfg.get("reminders_list_name")
-                    or self.config.get("reminder_list_name")
-                    or "Напоминания"
-                )
                 tasks_raw = self.clickup_client.fetch_tasks(
-                    list_name=list_name if not list_id else None,
-                    list_id=list_id,
+                    list_name=self.reminders_list_name if not self.reminders_list_id else None,
+                    list_id=self.reminders_list_id,
                 )
         except Exception as exc:
             LOGGER.error("Failed to fetch tasks from ClickUp: %s", exc)
@@ -412,34 +497,105 @@ class TelegramReminderService:
             payload["show_alert"] = True
         self._telegram_post("answerCallbackQuery", payload)
 
-    def send_reminders(self, chat_id: Optional[str] = None, limit: Optional[int] = None) -> List[ReminderTask]:
-        target_chat = self._resolve_target_chat(chat_id)
-        if not target_chat:
-            raise ConfigurationError(
-                "Chat id not supplied. Отправьте /start боту или передайте --chat-id для send_telegram_reminders.py."
-            )
+    def _group_tasks_by_chat(
+        self,
+        tasks: Sequence[ReminderTask],
+        fallback_chat: Optional[str],
+    ) -> Dict[str, List[ReminderTask]]:
+        deliveries: Dict[str, List[ReminderTask]] = {}
 
-        if not self.default_chat_id:
-            self.default_chat_id = target_chat
-            self._persist_chat_id(target_chat)
+        for task in tasks:
+            chat_ids = self._chat_targets_for_task(task)
+            if not chat_ids:
+                if fallback_chat:
+                    chat_ids = (fallback_chat,)
+                else:
+                    LOGGER.warning(
+                        "No Telegram chat mapping for assignee '%s' (task %s). Skipping.",
+                        task.assignee,
+                        task.task_id,
+                    )
+                    continue
 
-        tasks = self.fetch_pending_tasks(limit=limit)
+            seen: set[str] = set()
+            for chat_id in chat_ids:
+                chat_candidate = str(chat_id).strip()
+                if not chat_candidate or chat_candidate in seen:
+                    continue
+                deliveries.setdefault(chat_candidate, []).append(task)
+                seen.add(chat_candidate)
+
+        return deliveries
+
+    def _dispatch_tasks_to_chat(self, chat_id: str, tasks: Sequence[ReminderTask]) -> None:
+        if not chat_id:
+            return
+
+        self._ensure_default_chat(chat_id)
+
         if not tasks:
-            self.send_plain_message(target_chat, "✅ На данный момент нет задач, требующих внимания.")
-            return []
+            self.send_plain_message(chat_id, "✅ На данный момент нет задач, требующих внимания.")
+            return
 
         preface = (
             f"📌 Найдено задач: {len(tasks)}. "
             "Отметьте статус прямо в боте — выбор обновит задачу в ClickUp."
         )
-        self.send_plain_message(target_chat, preface)
+        self.send_plain_message(chat_id, preface)
 
         for idx, task in enumerate(tasks, start=1):
             try:
-                self.send_task_message(target_chat, task, idx)
+                self.send_task_message(chat_id, task, idx)
             except Exception as exc:  # pragma: no cover - network guard
-                LOGGER.error("Failed to send task %s to Telegram: %s", task.task_id, exc)
-                continue
+                LOGGER.error("Failed to send task %s to Telegram chat %s: %s", task.task_id, chat_id, exc)
+
+    def send_reminders(
+        self,
+        chat_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        broadcast_all: bool = False,
+    ) -> List[ReminderTask]:
+        tasks = self.fetch_pending_tasks(limit=limit)
+
+        if chat_id is not None:
+            target_chat = self._resolve_target_chat(chat_id)
+            if not target_chat:
+                raise ConfigurationError(
+                    "Chat id not supplied. Отправьте /start боту или передайте --chat-id для send_telegram_reminders.py."
+                )
+            if broadcast_all:
+                self._dispatch_tasks_to_chat(str(target_chat), tasks)
+                return tasks
+
+            fallback_global = self._resolve_target_chat()
+            fallback_chat = (
+                str(target_chat)
+                if fallback_global is not None and str(fallback_global) == str(target_chat)
+                else None
+            )
+            deliveries = self._group_tasks_by_chat(tasks, fallback_chat=fallback_chat)
+            bucket = deliveries.get(str(target_chat), [])
+            self._dispatch_tasks_to_chat(str(target_chat), bucket)
+            return tasks
+
+        if not tasks:
+            fallback_chat = self._resolve_target_chat()
+            if fallback_chat:
+                self._dispatch_tasks_to_chat(fallback_chat, [])
+            else:
+                LOGGER.info("No pending tasks and no Telegram chat configured to notify.")
+            return []
+
+        fallback_chat = self._resolve_target_chat()
+        deliveries = self._group_tasks_by_chat(tasks, fallback_chat=fallback_chat)
+        if not deliveries:
+            raise ConfigurationError(
+                "Не удалось определить чаты Telegram для отправки напоминаний. "
+                "Добавьте telegram.chat_id или telegram.assignee_chat_map в config.json."
+            )
+
+        for target_chat, bucket in deliveries.items():
+            self._dispatch_tasks_to_chat(target_chat, bucket)
 
         return tasks
 

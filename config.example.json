@@ -15,6 +15,9 @@
   "telegram": {
     "enabled": true,
     "chat_id": "<your_chat_id_or_group_id>",
+    "assignee_chat_map": {
+      "Alex Example": "<telegram_chat_or_user_id>"
+    },
     "notifications": {
       "task_reminders": true,
       "status_updates": true,

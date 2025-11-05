@@ -44,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         service = TelegramReminderService.from_environment()
-        tasks = service.send_reminders(chat_id=args.chat_id, limit=args.limit)
+        tasks = service.send_reminders(
+            chat_id=args.chat_id,
+            limit=args.limit,
+            broadcast_all=bool(args.chat_id),
+        )
     except ConfigurationError as exc:
         logging.error("Configuration error: %s", exc)
         return 2
