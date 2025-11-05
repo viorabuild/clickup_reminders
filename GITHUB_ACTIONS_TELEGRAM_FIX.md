@@ -92,8 +92,8 @@
 
 1. Откройте: https://github.com/viorab/clickup-rem/settings/secrets/actions
 2. Добавьте:
-   - `TELEGRAM_BOT_TOKEN` = `7638513608:AAGsZqML_dYnOtwCSV22AL13Glm4hI21WIY`
-   - `TELEGRAM_CHAT_ID` = `-1003069541143`
+   - `TELEGRAM_BOT_TOKEN` = `<ваш_бот_токен_из_@BotFather>`
+   - `TELEGRAM_CHAT_ID` = `<id_чата_куда_шлём_уведомления>`
 
 ## 🧪 Тестирование
 
