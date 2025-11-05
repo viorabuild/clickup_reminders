@@ -43,6 +43,28 @@ class ClickUpClient:
         response.raise_for_status()
         return response.json()
 
+    def fetch_tasks_by_tag(self, tag: str) -> List[Dict[str, Any]]:
+        """Return every task across the workspace that contains the provided tag."""
+
+        normalized = tag.lstrip("#").strip()
+        if not normalized:
+            return []
+
+        tasks: List[Dict[str, Any]] = []
+        next_page: Optional[int] = 0
+
+        while next_page is not None:
+            params = {"subtasks": "true", "page": next_page, "tags[]": normalized}
+            response = self.session.get(f"{self.BASE_URL}/team/{self.team_id}/task", params=params)
+            response.raise_for_status()
+
+            payload = response.json()
+            tasks.extend(payload.get("tasks", []))
+            raw_next = payload.get("next_page")
+            next_page = raw_next if isinstance(raw_next, int) else None
+
+        return tasks
+
     def update_status(self, task_id: str, status: str) -> None:
         """Update ClickUp task status."""
         response = self.session.put(

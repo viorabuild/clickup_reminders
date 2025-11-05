@@ -259,17 +259,43 @@ class TelegramReminderService:
     # ClickUp helpers
     # --------------------------------------------------------------------- #
     def fetch_pending_tasks(self, limit: Optional[int] = None) -> List[ReminderTask]:
-        """Return tasks from the reminders list that are not completed."""
+        """Return tasks from ClickUp that match the reminder filters and are not completed."""
         clickup_cfg = self.config.get("clickup", {})
-        list_id = clickup_cfg.get("list_id") or self.config.get("clickup_list_id")
-        list_name = (
-            clickup_cfg.get("reminders_list_name")
-            or self.config.get("reminder_list_name")
-            or "Напоминания"
-        )
 
+        tags_cfg = (
+            clickup_cfg.get("reminder_tags")
+            or clickup_cfg.get("reminder_tag")
+            or self.config.get("reminder_tags")
+            or self.config.get("reminder_tag")
+        )
+        reminder_tags: List[str] = []
+        if isinstance(tags_cfg, str):
+            reminder_tags = [tags_cfg]
+        elif isinstance(tags_cfg, (list, tuple)):
+            reminder_tags = [str(tag) for tag in tags_cfg if str(tag).strip()]
+
+        tasks_raw: List[Dict[str, Any]] = []
         try:
-            tasks_raw = self.clickup_client.fetch_tasks(list_name=list_name if not list_id else None, list_id=list_id)
+            if reminder_tags:
+                seen_ids: set[str] = set()
+                for tag in reminder_tags:
+                    for task in self.clickup_client.fetch_tasks_by_tag(tag):
+                        task_id = str(task.get("id") or "").strip()
+                        if not task_id or task_id in seen_ids:
+                            continue
+                        tasks_raw.append(task)
+                        seen_ids.add(task_id)
+            else:
+                list_id = clickup_cfg.get("list_id") or self.config.get("clickup_list_id")
+                list_name = (
+                    clickup_cfg.get("reminders_list_name")
+                    or self.config.get("reminder_list_name")
+                    or "Напоминания"
+                )
+                tasks_raw = self.clickup_client.fetch_tasks(
+                    list_name=list_name if not list_id else None,
+                    list_id=list_id,
+                )
         except Exception as exc:
             LOGGER.error("Failed to fetch tasks from ClickUp: %s", exc)
             raise
@@ -471,33 +497,24 @@ class TelegramReminderService:
             self.default_chat_id = chat_id
             self._persist_chat_id(chat_id)
 
-        ack_sent = False
-        if callback_id:
-            try:
-                self.answer_callback(callback_id, "Принял, обновляю…")
-                ack_sent = True
-            except requests.HTTPError as exc:  # pragma: no cover - network guard
-                response_text = getattr(exc.response, "text", "") if hasattr(exc, "response") else ""
-                if "query is too old" in response_text or "query ID is invalid" in response_text:
-                    LOGGER.warning("Callback expired for task %s, skipping.", task_id)
-                    return
-                raise
-
         try:
             self.update_clickup_status(task_id, status_key)
         except Exception as exc:
             LOGGER.error("Failed to update task %s status: %s", task_id, exc)
-            if callback_id and not ack_sent:
+            if callback_id:
                 try:
-                    self.answer_callback(callback_id, "Не удалось обновить задачу в ClickUp", show_alert=True)
+                    self.answer_callback(
+                        callback_id,
+                        "❌ Не удалось обновить задачу в ClickUp",
+                        show_alert=True,
+                    )
                 except Exception:  # pragma: no cover - best effort
                     pass
-            else:
-                if chat_id:
-                    self.send_plain_message(
-                        chat_id,
-                        f"⚠️ Не удалось обновить задачу <b>{task_id}</b>: {exc}",
-                    )
+            if chat_id:
+                self.send_plain_message(
+                    chat_id,
+                    f"⚠️ Не удалось обновить задачу <b>{task_id}</b>: {exc}",
+                )
             return
 
         if not chat_id:
@@ -513,6 +530,11 @@ class TelegramReminderService:
             LOGGER.warning("No chat id available to notify about task %s update", task_id)
             return
 
+        if callback_id:
+            try:
+                self.answer_callback(callback_id, "Готово!")
+            except Exception as exc:  # pragma: no cover - network guard
+                LOGGER.debug("Failed to send callback ack for task %s: %s", task_id, exc)
         task_payload = self.fetch_task_details(task_id)
         task_name = task_payload.get("name", f"Задача {task_id}")
         self.send_plain_message(

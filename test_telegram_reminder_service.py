@@ -131,6 +131,54 @@ class TelegramReminderServiceTest(unittest.TestCase):
         send_payload = next(call["json"] for call in session.calls if call["url"].endswith("sendMessage"))
         self.assertEqual("42", send_payload["chat_id"])
 
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_fetch_pending_tasks_with_tags_deduplicates(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client.fetch_tasks_by_tag.side_effect = [
+            [
+                {"id": "1", "name": "Task A", "status": {"status": "open"}, "due_date": None},
+                {"id": "2", "name": "Task B", "status": {"status": "open"}, "due_date": None},
+            ],
+            [
+                {"id": "2", "name": "Task B", "status": {"status": "open"}, "due_date": None},
+                {"id": "3", "name": "Task C", "status": {"status": "done"}, "due_date": None},
+            ],
+        ]
+        mock_client_cls.return_value = mock_client
+
+        config = dict(self.config)
+        config["clickup"] = dict(self.config["clickup"], reminder_tags=["#напоминание", "важно"])
+
+        service = TelegramReminderService(config, self.credentials, session=DummySession())
+        tasks = service.fetch_pending_tasks()
+
+        self.assertEqual([task.task_id for task in tasks], ["1", "2"])
+        mock_client.fetch_tasks_by_tag.assert_any_call("#напоминание")
+        mock_client.fetch_tasks_by_tag.assert_any_call("важно")
+
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_callback_failure_reports_to_user(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        service = TelegramReminderService(self.config, self.credentials, session=session)
+
+        with patch.object(service, "update_clickup_status", side_effect=RuntimeError("boom")), patch.object(
+            service, "_persist_chat_id"
+        ):
+            callback = {
+                "id": "cb-err",
+                "data": "s:task-err:d",
+                "message": {"chat": {"id": 99}, "message_id": 77},
+            }
+            service.handle_callback(callback)
+
+        methods = [call["url"].split("/")[-1] for call in session.calls]
+        self.assertIn("answerCallbackQuery", methods)
+        self.assertIn("sendMessage", methods)
+
+        payloads = [call["json"] for call in session.calls if call["url"].endswith("sendMessage")]
+        self.assertTrue(any("Не удалось обновить задачу" in payload["text"] for payload in payloads))
+
 
 if __name__ == "__main__":
     unittest.main()

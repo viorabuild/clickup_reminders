@@ -1,6 +1,7 @@
 {
   "clickup_workspace_id": "<your_workspace_id>",
   "reminder_list_name": "Напоминания",
+  "reminder_tags": ["напоминание"],
   "phone_mapping": {
     "Alex": "+10000000000"
   },
