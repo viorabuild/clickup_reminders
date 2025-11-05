@@ -32,6 +32,7 @@ jobs:
       CLICKUP_WORKSPACE_ID: ${{ secrets.CLICKUP_WORKSPACE_ID }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      CONFIG_PATH: ${{ github.workspace }}/config.example.json
       BASE_DIR: ${{ github.workspace }}
       TZ: 'UTC'
 
@@ -93,7 +94,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "📨 Sending ClickUp reminders to Telegram..."
-          python send_telegram_reminders.py --verbose
+          python send_telegram_reminders.py --verbose ${TELEGRAM_CHAT_ID:+--chat-id "$TELEGRAM_CHAT_ID"}
 
       - name: Workflow summary
         if: always()

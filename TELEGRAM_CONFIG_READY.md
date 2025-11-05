@@ -1,7 +1,7 @@
 # 🔧 Готовая конфигурация Telegram
 
 ## Ваши данные Telegram:
-- **Bot Token:** `7638513608:AAGsZqML_dYnOtwCSV22AL13Glm4hI21WIY`
+- **Bot Token:** `<YOUR_TELEGRAM_BOT_TOKEN>`
 
 ---
 
@@ -26,7 +26,7 @@
     "api_key": "ваш_существующий_ключ"
   },
   "telegram": {
-    "bot_token": "7638513608:AAGsZqML_dYnOtwCSV22AL13Glm4hI21WIY"
+    "bot_token": "<YOUR_TELEGRAM_BOT_TOKEN>"
   }
 }
 ```
@@ -122,7 +122,7 @@ python3 test_telegram_integration.py
 
 Проверить бота можно командой:
 ```bash
-curl "https://api.telegram.org/bot7638513608:AAGsZqML_dYnOtwCSV22AL13Glm4hI21WIY/getMe"
+curl "https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/getMe"
 ```
 
 Должен вернуть информацию о боте.
