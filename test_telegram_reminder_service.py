@@ -239,10 +239,10 @@ class TelegramReminderServiceTest(unittest.TestCase):
             chat = call["json"]["chat_id"]
             messages_by_chat.setdefault(chat, []).append(call["json"]["text"])
 
-        expected_chats = {"chat-alex", "chat-eve-1", "chat-eve-2"}
+        expected_chats = {"chat-alex", "chat-eve-1", "chat-eve-2", "fallback-chat"}
         self.assertEqual(set(messages_by_chat.keys()), expected_chats)
 
-        for chat_id in expected_chats:
+        for chat_id in {"chat-alex", "chat-eve-1", "chat-eve-2"}:
             self.assertGreaterEqual(len(messages_by_chat[chat_id]), 1)
 
         self.assertEqual(len(messages_by_chat["chat-alex"]), 2)
@@ -253,7 +253,8 @@ class TelegramReminderServiceTest(unittest.TestCase):
 
         self.assertEqual(len(messages_by_chat["chat-eve-2"]), 2)
         self.assertIn("Task Eve", messages_by_chat["chat-eve-2"][1])
-        self.assertNotIn("fallback-chat", messages_by_chat)
+        self.assertGreaterEqual(len(messages_by_chat["fallback-chat"]), 1)
+        self.assertIn("Task Unknown", " ".join(messages_by_chat["fallback-chat"]))
 
     @patch("telegram_reminder_service.ClickUpClient")
     def test_send_reminders_broadcast_all_when_overridden(self, mock_client_cls):
@@ -297,6 +298,115 @@ class TelegramReminderServiceTest(unittest.TestCase):
         self.assertEqual(len(messages_by_chat["custom-chat"]), 1 + len(tasks))
         self.assertIn("Task Alex", " ".join(messages_by_chat["custom-chat"]))
         self.assertIn("Task Eve", " ".join(messages_by_chat["custom-chat"]))
+
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_send_reminders_chat_specific_excludes_fallback(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        config = {
+            "clickup": {
+                "status_mapping": {
+                    "ВЫПОЛНЕНО": "complete",
+                    "НЕ_ВЫПОЛНЕНО": "todo",
+                    "В_РАБОТЕ": "in progress",
+                },
+                "completed_status": "complete",
+            },
+            "working_hours": {"timezone": "Europe/Lisbon"},
+            "telegram": {
+                "assignee_chat_map": {
+                    "Alex": "chat-alex",
+                }
+            },
+        }
+        credentials = {
+            "clickup_api_key": "key",
+            "clickup_team_id": "123",
+            "telegram_bot_token": "token",
+            "telegram_chat_id": "chat-alex",
+        }
+
+        service = TelegramReminderService(config, credentials, session=session)
+        tasks = [
+            ReminderTask(
+                task_id="1",
+                name="Task Alex",
+                status="todo",
+                due_human="2024-01-01 10:00",
+                assignee="Alex",
+                url="url-1",
+            ),
+            ReminderTask(
+                task_id="2",
+                name="Task Unknown",
+                status="todo",
+                due_human="2024-01-02 10:00",
+                assignee="",
+                url="url-2",
+            ),
+        ]
+
+        with patch.object(service, "fetch_pending_tasks", return_value=tasks):
+            service.send_reminders(chat_id="chat-alex")
+
+        send_calls = [call for call in session.calls if call["url"].endswith("sendMessage")]
+        self.assertTrue(send_calls)
+        payloads = [call["json"] for call in send_calls if call["json"]["chat_id"] == "chat-alex"]
+        self.assertTrue(payloads)
+
+        combined_text = " ".join(payload["text"] for payload in payloads)
+        self.assertIn("Task Alex", combined_text)
+        self.assertNotIn("Task Unknown", combined_text)
+
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_send_reminders_chat_specific_with_only_unmapped_tasks(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        config = {
+            "clickup": {
+                "status_mapping": {
+                    "ВЫПОЛНЕНО": "complete",
+                    "НЕ_ВЫПОЛНЕНО": "todo",
+                    "В_РАБОТЕ": "in progress",
+                },
+                "completed_status": "complete",
+            },
+            "working_hours": {"timezone": "Europe/Lisbon"},
+            "telegram": {
+                "assignee_chat_map": {
+                    "Alex": "chat-alex",
+                }
+            },
+        }
+        credentials = {
+            "clickup_api_key": "key",
+            "clickup_team_id": "123",
+            "telegram_bot_token": "token",
+            "telegram_chat_id": "chat-alex",
+        }
+
+        service = TelegramReminderService(config, credentials, session=session)
+        tasks = [
+            ReminderTask(
+                task_id="1",
+                name="Task Unknown",
+                status="todo",
+                due_human="2024-01-02 10:00",
+                assignee="",
+                url="url-2",
+            ),
+        ]
+
+        with patch.object(service, "fetch_pending_tasks", return_value=tasks):
+            service.send_reminders(chat_id="chat-alex")
+
+        send_calls = [call for call in session.calls if call["url"].endswith("sendMessage")]
+        self.assertTrue(send_calls)
+
+        payloads = [call["json"] for call in send_calls if call["json"]["chat_id"] == "chat-alex"]
+        self.assertEqual(len(payloads), 1)
+        self.assertIn("На данный момент нет задач", payloads[0]["text"])
+        self.assertNotIn("Task Unknown", payloads[0]["text"])
 
     @patch("telegram_reminder_service.ClickUpClient")
     def test_fetch_pending_tasks_multiple_team_ids(self, mock_client_cls):

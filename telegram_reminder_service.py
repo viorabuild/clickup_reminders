@@ -985,9 +985,11 @@ class TelegramReminderService:
                 self._dispatch_tasks_to_chat(str(target_chat), tasks)
                 return tasks
 
-            deliveries = self._group_tasks_by_chat(tasks, fallback_chat=str(target_chat))
-            bucket = deliveries.get(str(target_chat), [])
-            self._dispatch_tasks_to_chat(str(target_chat), bucket)
+            target_chat_str = str(target_chat)
+            deliveries = self._group_tasks_by_chat(tasks, fallback_chat=None)
+            bucket = deliveries.get(target_chat_str, [])
+
+            self._dispatch_tasks_to_chat(target_chat_str, bucket)
             return tasks
 
         if not tasks:
