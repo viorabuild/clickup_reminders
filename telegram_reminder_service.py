@@ -333,6 +333,7 @@ class TelegramReminderService:
         tz_name = config.get("working_hours", {}).get("timezone") or "UTC"
         self.timezone_name = tz_name
         self.callback_log_path = self._resolve_callback_log_path()
+        self._processed_callback_ids: set[str] = self._load_processed_callback_ids()
 
     @classmethod
     def from_environment(cls) -> "TelegramReminderService":
@@ -543,8 +544,44 @@ class TelegramReminderService:
             with self.callback_log_path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
                 fh.write("\n")
+            if entry.get("result") == "success":
+                callback_id = entry.get("callback_id")
+                if callback_id:
+                    self._processed_callback_ids.add(str(callback_id))
         except Exception as exc:  # pragma: no cover - best effort
             LOGGER.debug("Failed to append callback log: %s", exc)
+
+    def _load_processed_callback_ids(self) -> set[str]:
+        if not self.callback_log_path:
+            return set()
+        try:
+            lines = self.callback_log_path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return set()
+        except Exception as exc:
+            LOGGER.debug("Failed to prime processed callback cache: %s", exc)
+            return set()
+
+        processed: set[str] = set()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("result") != "success":
+                continue
+            callback_id = entry.get("callback_id")
+            if callback_id:
+                processed.add(str(callback_id))
+        return processed
+
+    def _is_callback_processed(self, callback_id: Optional[str]) -> bool:
+        if not callback_id:
+            return False
+        return str(callback_id) in self._processed_callback_ids
 
     def ensure_callback_comments(self, max_entries: int = 20) -> None:
         """
@@ -966,6 +1003,10 @@ class TelegramReminderService:
         raw_chat_id = chat.get("id")
         chat_id = str(raw_chat_id) if raw_chat_id is not None else ""
         message_id = message.get("message_id")
+
+        if self._is_callback_processed(callback_id):
+            LOGGER.debug("Callback %s already processed; skipping duplicate update.", callback_id)
+            return
 
         if not data.startswith("s:") or data.count(":") != 2:
             if callback_id:
