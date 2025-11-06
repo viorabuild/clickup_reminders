@@ -31,6 +31,7 @@
   "telegram": {
     "enabled": true,
     "chat_id": "<your_chat_id_or_group_id>",
+    "callback_log_path": "var/telegram_callback_log.jsonl",
     "assignee_chat_map": {
       "Alex Example": "<telegram_chat_or_user_id>"
     },

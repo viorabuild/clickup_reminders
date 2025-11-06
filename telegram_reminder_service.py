@@ -28,6 +28,7 @@ LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
 CHAT_ID_CACHE_PATH = PROJECT_ROOT / "var" / "telegram_chat_id.txt"
+CALLBACK_LOG_PATH = PROJECT_ROOT / "var" / "telegram_callback_log.jsonl"
 DEFAULT_SECRETS_CANDIDATES: Tuple[Path, ...] = (
     PROJECT_ROOT / ".venv" / "bin" / "secrets.json",
     PROJECT_ROOT.parent / ".venv" / "bin" / "secrets.json",
@@ -331,6 +332,7 @@ class TelegramReminderService:
         self.assignee_chat_map = self._build_assignee_chat_map()
         tz_name = config.get("working_hours", {}).get("timezone") or "UTC"
         self.timezone_name = tz_name
+        self.callback_log_path = self._resolve_callback_log_path()
 
     @classmethod
     def from_environment(cls) -> "TelegramReminderService":
@@ -517,6 +519,32 @@ class TelegramReminderService:
                 return self.assignee_chat_map[trimmed]
 
         return ()
+
+    def _resolve_callback_log_path(self) -> Optional[Path]:
+        telegram_cfg = self.config.get("telegram") or {}
+        raw_path = telegram_cfg.get("callback_log_path")
+        if raw_path is None:
+            return CALLBACK_LOG_PATH
+        raw_str = str(raw_path).strip()
+        if not raw_str:
+            return None
+        try:
+            return Path(raw_str).expanduser()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("Failed to resolve callback log path %s: %s", raw_path, exc)
+            return CALLBACK_LOG_PATH
+
+    def _append_callback_log(self, entry: Dict[str, Any]) -> None:
+        if not self.callback_log_path:
+            return
+        try:
+            self.callback_log_path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(entry, ensure_ascii=True)
+            with self.callback_log_path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+                fh.write("\n")
+        except Exception as exc:  # pragma: no cover - best effort
+            LOGGER.debug("Failed to append callback log: %s", exc)
 
     # --------------------------------------------------------------------- #
     # ClickUp helpers
@@ -872,6 +900,21 @@ class TelegramReminderService:
                 self.answer_callback(callback_id, "Действие не поддерживается", show_alert=True)
             return
 
+        actor = callback.get("from") or {}
+        base_log_entry: Dict[str, Any] = {
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "task_id": task_id,
+            "callback_id": callback_id,
+            "action_code": action_code,
+            "status_key": status_key,
+            "chat_id": str(raw_chat_id) if raw_chat_id is not None else "",
+            "message_id": message_id,
+            "user_id": actor.get("id"),
+            "username": actor.get("username"),
+            "first_name": actor.get("first_name"),
+            "last_name": actor.get("last_name"),
+        }
+
         if chat_id:
             self.default_chat_id = chat_id
             self._persist_chat_id(chat_id)
@@ -880,6 +923,10 @@ class TelegramReminderService:
             self.update_clickup_status(task_id, status_key)
         except Exception as exc:
             LOGGER.error("Failed to update task %s status: %s", task_id, exc)
+            error_log = dict(base_log_entry)
+            error_log["result"] = "error"
+            error_log["error"] = str(exc)
+            self._append_callback_log(error_log)
             if callback_id:
                 try:
                     self.answer_callback(
@@ -904,6 +951,11 @@ class TelegramReminderService:
                 self.remove_inline_keyboard(chat_id, message_id)
             except Exception as exc:  # pragma: no cover - best effort
                 LOGGER.debug("Failed to clear inline keyboard for message %s: %s", message_id, exc)
+
+        success_log = dict(base_log_entry)
+        success_log["chat_id"] = str(chat_id) if chat_id else success_log["chat_id"]
+        success_log["result"] = "success"
+        self._append_callback_log(success_log)
 
         if not chat_id:
             LOGGER.warning("No chat id available to notify about task %s update", task_id)

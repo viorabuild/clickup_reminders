@@ -87,7 +87,7 @@ class TelegramReminderServiceTest(unittest.TestCase):
             service, "fetch_task_details", return_value={"name": "Demo task"}
         ), patch.object(service, "answer_callback", wraps=service.answer_callback) as answer_cb, patch.object(
             service, "_persist_chat_id"
-        ):
+        ), patch.object(service, "_append_callback_log") as log_callback:
             callback = {
                 "id": "cb-1",
                 "data": "s:task-pending:d",
@@ -106,6 +106,10 @@ class TelegramReminderServiceTest(unittest.TestCase):
         self.assertIn("Demo task", send_payload["text"])
         self.assertIn("ВЫПОЛНЕНО", send_payload["text"])
         answer_cb.assert_called_once()
+        log_callback.assert_called_once()
+        log_payload = log_callback.call_args[0][0]
+        self.assertEqual(log_payload["task_id"], "task-pending")
+        self.assertEqual(log_payload["result"], "success")
 
     @patch("telegram_reminder_service.ClickUpClient")
     def test_handle_callback_without_chat_uses_default(self, mock_client_cls):
@@ -117,7 +121,7 @@ class TelegramReminderServiceTest(unittest.TestCase):
             service, "fetch_task_details", return_value={"name": "Demo task"}
         ), patch.object(service, "answer_callback", wraps=service.answer_callback) as answer_cb, patch.object(
             service, "_persist_chat_id"
-        ):
+        ), patch.object(service, "_append_callback_log") as log_callback:
             callback = {
                 "id": "cb-2",
                 "data": "s:task-pending:d",
@@ -127,6 +131,10 @@ class TelegramReminderServiceTest(unittest.TestCase):
 
         update_status.assert_called_once_with("task-pending", "ВЫПОЛНЕНО")
         answer_cb.assert_called_once()
+        log_callback.assert_called_once()
+        log_payload = log_callback.call_args[0][0]
+        self.assertEqual(log_payload["task_id"], "task-pending")
+        self.assertEqual(log_payload["result"], "success")
 
         send_payload = next(call["json"] for call in session.calls if call["url"].endswith("sendMessage"))
         self.assertEqual("42", send_payload["chat_id"])
@@ -164,7 +172,7 @@ class TelegramReminderServiceTest(unittest.TestCase):
 
         with patch.object(service, "update_clickup_status", side_effect=RuntimeError("boom")), patch.object(
             service, "_persist_chat_id"
-        ):
+        ), patch.object(service, "_append_callback_log") as log_callback:
             callback = {
                 "id": "cb-err",
                 "data": "s:task-err:d",
@@ -178,6 +186,11 @@ class TelegramReminderServiceTest(unittest.TestCase):
 
         payloads = [call["json"] for call in session.calls if call["url"].endswith("sendMessage")]
         self.assertTrue(any("Не удалось обновить задачу" in payload["text"] for payload in payloads))
+        log_callback.assert_called_once()
+        log_payload = log_callback.call_args[0][0]
+        self.assertEqual(log_payload["task_id"], "task-err")
+        self.assertEqual(log_payload["result"], "error")
+        self.assertIn("boom", log_payload["error"])
 
     @patch("telegram_reminder_service.ClickUpClient")
     def test_send_reminders_routes_by_assignee(self, mock_client_cls):
