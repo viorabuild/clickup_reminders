@@ -279,7 +279,7 @@ def _primary_assignee(task: Dict[str, Any]) -> str:
         if name:
             return str(name)
     watchers = task.get("watchers") or []
-    if watchers and isinstance(watchers, list):
+    if watchers and isinstance(watchers, list) and len(watchers) == 1:
         creator = task.get("creator") or {}
         creator_id = str(creator.get("id")) if creator else None
         for watcher in watchers:
@@ -416,8 +416,6 @@ class TelegramReminderService:
         mapping.setdefault("В_РАБОТЕ", clickup_section.get("in_progress_status", "in progress"))
         mapping.setdefault("ПОСТАВЛЕНА", clickup_section.get("pending_status", "поставлена"))
         mapping.setdefault("НА_ДОРАБОТКЕ", clickup_section.get("callback_status", "на доработке"))
-        mapping.setdefault("БЭКЛОГ", clickup_section.get("backlog_status", "бэклог"))
-        mapping.setdefault("НА_ПРОВЕРКЕ", clickup_section.get("review_status", "на проверке"))
         mapping.setdefault("ОТМЕНЕНА", clickup_section.get("cancelled_status", "отменена"))
         return mapping
 
@@ -947,14 +945,21 @@ class TelegramReminderService:
         self._ensure_default_chat(chat_id)
 
         if not tasks:
-            self.send_plain_message(chat_id, "✅ На данный момент нет задач, требующих внимания.")
+            try:
+                self.send_plain_message(chat_id, "✅ На данный момент нет задач, требующих внимания.")
+            except Exception as exc:  # pragma: no cover - network guard
+                LOGGER.error("Failed to send empty-state message to %s: %s", chat_id, exc)
             return
 
         preface = (
             f"📌 Найдено задач: {len(tasks)}. "
             "Отметьте статус прямо в боте — выбор обновит задачу в ClickUp."
         )
-        self.send_plain_message(chat_id, preface)
+        try:
+            self.send_plain_message(chat_id, preface)
+        except Exception as exc:  # pragma: no cover - network guard
+            LOGGER.error("Failed to send preface to chat %s: %s", chat_id, exc)
+            return
 
         for idx, task in enumerate(tasks, start=1):
             try:
@@ -980,13 +985,7 @@ class TelegramReminderService:
                 self._dispatch_tasks_to_chat(str(target_chat), tasks)
                 return tasks
 
-            fallback_global = self._resolve_target_chat()
-            fallback_chat = (
-                str(target_chat)
-                if fallback_global is not None and str(fallback_global) == str(target_chat)
-                else None
-            )
-            deliveries = self._group_tasks_by_chat(tasks, fallback_chat=fallback_chat)
+            deliveries = self._group_tasks_by_chat(tasks, fallback_chat=None)
             bucket = deliveries.get(str(target_chat), [])
             self._dispatch_tasks_to_chat(str(target_chat), bucket)
             return tasks
@@ -999,13 +998,13 @@ class TelegramReminderService:
                 LOGGER.info("No pending tasks and no Telegram chat configured to notify.")
             return []
 
-        fallback_chat = self._resolve_target_chat()
-        deliveries = self._group_tasks_by_chat(tasks, fallback_chat=fallback_chat)
+        deliveries = self._group_tasks_by_chat(tasks, fallback_chat=None)
         if not deliveries:
-            raise ConfigurationError(
-                "Не удалось определить чаты Telegram для отправки напоминаний. "
-                "Добавьте telegram.chat_id или telegram.assignee_chat_map в config.json."
+            LOGGER.warning(
+                "Не удалось сопоставить ни одну задачу с Telegram чатами исполнителей. "
+                "Проверьте telegram.assignee_chat_map в config.json."
             )
+            return []
 
         for target_chat, bucket in deliveries.items():
             self._dispatch_tasks_to_chat(target_chat, bucket)

@@ -239,7 +239,7 @@ class TelegramReminderServiceTest(unittest.TestCase):
             chat = call["json"]["chat_id"]
             messages_by_chat.setdefault(chat, []).append(call["json"]["text"])
 
-        expected_chats = {"chat-alex", "chat-eve-1", "chat-eve-2", "fallback-chat"}
+        expected_chats = {"chat-alex", "chat-eve-1", "chat-eve-2"}
         self.assertEqual(set(messages_by_chat.keys()), expected_chats)
 
         for chat_id in expected_chats:
@@ -253,9 +253,7 @@ class TelegramReminderServiceTest(unittest.TestCase):
 
         self.assertEqual(len(messages_by_chat["chat-eve-2"]), 2)
         self.assertIn("Task Eve", messages_by_chat["chat-eve-2"][1])
-
-        self.assertEqual(len(messages_by_chat["fallback-chat"]), 2)
-        self.assertIn("Task Unknown", messages_by_chat["fallback-chat"][1])
+        self.assertNotIn("fallback-chat", messages_by_chat)
 
     @patch("telegram_reminder_service.ClickUpClient")
     def test_send_reminders_broadcast_all_when_overridden(self, mock_client_cls):
