@@ -79,6 +79,10 @@ export TELEGRAM_BOT_TOKEN=...
 # Разовое отправление задач в Telegram (используется в GitHub Actions)
 python3 send_telegram_reminders.py --verbose
 
+# Полный запуск как в GitHub Actions (подготовка CONFIG_PATH/секретов)
+python3 scripts/run_workflow_local.py --verbose
+# По умолчанию используется chat_id 322363243
+
 # Долгоживущий бот c long polling — отвечает на /start и кнопки
 python3 telegram_bot.py --initial-send --verbose
 ```
