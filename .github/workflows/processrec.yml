@@ -51,10 +51,15 @@ jobs:
           fetch-depth: 0  # Полная история для git
 
       - name: Prepare config file
+        env:
+          CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
         run: |
           set -euo pipefail
           TARGET="${GITHUB_WORKSPACE}/config.runtime.json"
-          if [ -f "${GITHUB_WORKSPACE}/config.json" ]; then
+          if [ -n "${CONFIG_JSON:-}" ]; then
+            echo "Using CONFIG_JSON secret"
+            python -c "import json, os; data=json.loads(os.environ['CONFIG_JSON']); path=os.environ['CONFIG_PATH'];\nwith open(path, 'w', encoding='utf-8') as fh: json.dump(data, fh, ensure_ascii=False, indent=2)"
+          elif [ -f "${GITHUB_WORKSPACE}/config.json" ]; then
             echo "Using repo config.json"
             cp "${GITHUB_WORKSPACE}/config.json" "${TARGET}"
           elif [ -f "${GITHUB_WORKSPACE}/config.example.json" ]; then

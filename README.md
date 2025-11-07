@@ -83,6 +83,9 @@ python3 send_telegram_reminders.py --verbose
 python3 scripts/run_workflow_local.py --verbose
 # Можно указать целевой чат через --chat-id или TELEGRAM_CHAT_ID
 
+# Передавать ваш config.json в GitHub Actions удобнее через секрет `CONFIG_JSON`
+# (см. workflow `.github/workflows/processrec.yml`)
+
 # Долгоживущий бот c long polling — отвечает на /start и кнопки
 python3 telegram_bot.py --initial-send --verbose
 ```
