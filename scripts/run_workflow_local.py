@@ -13,8 +13,6 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-DEFAULT_CHAT_ID = "322363243"
-
 
 def _expand(path: str | Path) -> Path:
     candidate = Path(path).expanduser()
@@ -59,10 +57,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--chat-id",
-        default=DEFAULT_CHAT_ID,
         help=(
             "Проброс параметра --chat-id в send_telegram_reminders.py. "
-            f"По умолчанию используется {DEFAULT_CHAT_ID}."
+            "Если не указан, используются значения из окружения или кеша."
         ),
     )
     parser.add_argument(

@@ -81,7 +81,7 @@ python3 send_telegram_reminders.py --verbose
 
 # Полный запуск как в GitHub Actions (подготовка CONFIG_PATH/секретов)
 python3 scripts/run_workflow_local.py --verbose
-# По умолчанию используется chat_id 322363243
+# Можно указать целевой чат через --chat-id или TELEGRAM_CHAT_ID
 
 # Долгоживущий бот c long polling — отвечает на /start и кнопки
 python3 telegram_bot.py --initial-send --verbose
