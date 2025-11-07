@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from telegram_reminder_service import ReminderTask, TelegramReminderService
+from telegram_reminder_service import ConfigurationError, ReminderTask, TelegramReminderService
 
 
 class DummyResponse:
@@ -398,8 +398,85 @@ class TelegramReminderServiceTest(unittest.TestCase):
 
         service = TelegramReminderService(config, self.credentials, session=DummySession())
         service.fetch_pending_tasks()
-
         mock_client.fetch_tasks_by_tag.assert_called_once_with("#напоминание", space_ids=["123"])
+
+    def test_voice_reminders_require_twilio_credentials(self):
+        session = DummySession()
+        service = TelegramReminderService(self.config, self.credentials, session=session)
+        with self.assertRaises(ConfigurationError):
+            service.send_voice_reminders()
+
+    @patch("telegram_reminder_service.TwilioService")
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_voice_reminders_grouped_by_phone(self, mock_client_cls, mock_twilio_cls):
+        mock_client_cls.return_value = MagicMock()
+        twilio_instance = MagicMock()
+        call_result = MagicMock(success=True, status="completed", error=None)
+        twilio_instance.make_call.return_value = call_result
+        mock_twilio_cls.return_value = twilio_instance
+
+        config = dict(self.config)
+        config["phone_mapping"] = {
+            "Alex": "+111",
+            "Eve|Ева": "+222",
+        }
+        credentials = dict(self.credentials)
+        credentials.update(
+            {
+                "twilio_account_sid": "AC123",
+                "twilio_auth_token": "tok",
+                "twilio_phone_number": "+999",
+            }
+        )
+
+        session = DummySession()
+        service = TelegramReminderService(config, credentials, session=session)
+        tasks = [
+            ReminderTask(
+                task_id="1",
+                name="Task Alex",
+                status="todo",
+                due_human="2024-01-01 10:00",
+                assignee="Alex",
+                url="url-1",
+            ),
+            ReminderTask(
+                task_id="2",
+                name="Task Eve",
+                status="todo",
+                due_human="2024-01-02 10:00",
+                assignee="Ева",
+                url="url-2",
+            ),
+            ReminderTask(
+                task_id="3",
+                name="Task No Phone",
+                status="todo",
+                due_human="2024-01-03 10:00",
+                assignee="—",
+                url="url-3",
+            ),
+        ]
+
+        with patch.object(service, "fetch_pending_tasks", return_value=tasks):
+            deliveries = service.send_voice_reminders()
+
+        mock_twilio_cls.assert_called_once_with("AC123", "tok")
+        self.assertEqual(2, twilio_instance.make_call.call_count)
+        twilio_instance.make_call.assert_any_call(
+            from_phone="+999",
+            to_phone="+111",
+            task_messages=["Задача Task Alex. Статус: todo. Срок: 2024-01-01 10:00."],
+        )
+        twilio_instance.make_call.assert_any_call(
+            from_phone="+999",
+            to_phone="+222",
+            task_messages=["Задача Task Eve. Статус: todo. Срок: 2024-01-02 10:00."],
+        )
+
+        self.assertEqual(2, len(deliveries))
+        phones = sorted(entry["phone"] for entry in deliveries)
+        self.assertEqual(["+111", "+222"], phones)
 
     @patch("telegram_reminder_service.time")
     @patch("telegram_reminder_service.ClickUpClient")

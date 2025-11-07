@@ -85,6 +85,15 @@ python3 telegram_bot.py --initial-send --verbose
 
 - После первого `/start` бот запоминает ваш chat_id в `var/telegram_chat_id.txt`, поэтому GitHub Actions и скрипты могут отправлять напоминания напрямую, даже если в конфигурации не указан `telegram.chat_id`.
 
+- Быстрые голосовые напоминания через Twilio (использует `phone_mapping` и новые методы сервиса):
+```bash
+# dry-run покажет, кому и сколько задач будет озвучено
+python3 send_twilio_calls.py --dry-run
+
+# ограничить прозвон конкретным исполнителем
+python3 send_twilio_calls.py --assignee "Alex"
+```
+
 - Запуск основного голосового скрипта:
 ```bash
 # опционально: URL вебхуков (используется в некоторых сценариях)

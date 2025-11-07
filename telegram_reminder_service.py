@@ -23,6 +23,11 @@ import requests
 
 from clickup import ClickUpClient
 
+try:  # pragma: no cover - support both package and script execution
+    from .telephony import TwilioService
+except ImportError:  # pragma: no cover - script mode fallback
+    from telephony import TwilioService  # type: ignore
+
 LOGGER = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -134,6 +139,9 @@ def load_runtime_credentials(config: Dict[str, Any]) -> Dict[str, Any]:
         "clickup_space_ids": os.getenv("CLICKUP_SPACE_IDS"),
         "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID") or (config.get("telegram", {}) or {}).get("chat_id"),
+        "twilio_account_sid": os.getenv("TWILIO_ACCOUNT_SID"),
+        "twilio_auth_token": os.getenv("TWILIO_AUTH_TOKEN"),
+        "twilio_phone_number": os.getenv("TWILIO_PHONE_NUMBER"),
     }
 
     team_ids: List[str] = []
@@ -213,6 +221,18 @@ def load_runtime_credentials(config: Dict[str, Any]) -> Dict[str, Any]:
             "telegram_chat_id": (
                 ("telegram", "chat_id"),
                 ("telegram", "secrets", "chat_id"),
+            ),
+            "twilio_account_sid": (
+                ("twilio", "account_sid"),
+                ("twilio", "secrets", "account_sid"),
+            ),
+            "twilio_auth_token": (
+                ("twilio", "auth_token"),
+                ("twilio", "secrets", "auth_token"),
+            ),
+            "twilio_phone_number": (
+                ("twilio", "phone_number"),
+                ("twilio", "secrets", "phone_number"),
             ),
         }
         for key, paths in secret_mappings.items():
@@ -362,6 +382,10 @@ class TelegramReminderService:
         self.timezone_name = tz_name
         self.callback_log_path = self._resolve_callback_log_path()
         self._processed_callback_ids: set[str] = self._load_processed_callback_ids()
+        self.phone_mapping = self._build_phone_mapping()
+        self.twilio_service: Optional[TwilioService] = None
+        self.twilio_from_phone: Optional[str] = None
+        self._init_twilio_service()
 
     @classmethod
     def from_environment(cls) -> "TelegramReminderService":
@@ -497,6 +521,60 @@ class TelegramReminderService:
 
         return result
 
+    def _build_phone_mapping(self) -> Dict[str, str]:
+        """
+        Normalise phone mapping config so we can correlate assignees with numbers.
+
+        Supports legacy keys like ``contacts`` and allows multiple aliases separated by ``|``.
+        """
+        raw_mapping = (
+            self.config.get("phone_mapping")
+            or self.config.get("contacts")
+            or self.config.get("assignee_phones")
+            or {}
+        )
+        if not isinstance(raw_mapping, dict):
+            return {}
+
+        mapping: Dict[str, str] = {}
+        for raw_name, raw_phone in raw_mapping.items():
+            if raw_phone is None:
+                continue
+            phone = str(raw_phone).strip()
+            if not phone:
+                continue
+
+            if isinstance(raw_name, str):
+                aliases = [part.strip() for part in raw_name.split("|") if part.strip()]
+            else:
+                aliases = [str(raw_name).strip()]
+
+            for alias in aliases:
+                normalized = self._normalize_assignee_name(alias)
+                if not normalized or normalized in mapping:
+                    continue
+                mapping[normalized] = phone
+
+        return mapping
+
+    def _init_twilio_service(self) -> None:
+        account_sid = str(self.credentials.get("twilio_account_sid") or "").strip()
+        auth_token = str(self.credentials.get("twilio_auth_token") or "").strip()
+        phone_number = str(self.credentials.get("twilio_phone_number") or "").strip()
+
+        if not (account_sid and auth_token and phone_number):
+            self.twilio_service = None
+            self.twilio_from_phone = None
+            return
+
+        try:
+            self.twilio_service = TwilioService(account_sid, auth_token)
+            self.twilio_from_phone = phone_number
+        except Exception as exc:  # pragma: no cover - network/sdk guard
+            LOGGER.warning("Failed to initialise Twilio client: %s", exc)
+            self.twilio_service = None
+            self.twilio_from_phone = None
+
     def _generate_action_code(self, index: int, used: set[str]) -> str:
         base = f"a{index}"
         counter = 0
@@ -609,6 +687,13 @@ class TelegramReminderService:
                 return self.assignee_chat_map[trimmed]
 
         return ()
+
+    @staticmethod
+    def _voice_prompt(task: ReminderTask) -> str:
+        """Compose a short Russian summary for Twilio to read out."""
+        due = task.due_human if task.due_human and task.due_human != "Не указан" else "без срока"
+        status = task.status or "статус неизвестен"
+        return f"Задача {task.name}. Статус: {status}. Срок: {due}."
 
     def _resolve_callback_log_path(self) -> Optional[Path]:
         telegram_cfg = self.config.get("telegram") or {}
@@ -1016,6 +1101,119 @@ class TelegramReminderService:
             self._dispatch_tasks_to_chat(target_chat, bucket)
 
         return tasks
+
+    def send_voice_reminders(
+        self,
+        assignees: Optional[Sequence[str]] = None,
+        limit: Optional[int] = None,
+        dry_run: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Place Twilio voice calls for pending reminders grouped by phone mapping.
+
+        Args:
+            assignees: Optional iterable of assignee names to target (case-insensitive).
+            limit: Optional max amount of tasks to pull from ClickUp.
+            dry_run: When True, skip actual Twilio API calls and only log the plan.
+        """
+        if not self.twilio_service or not self.twilio_from_phone:
+            raise ConfigurationError(
+                "Twilio credentials are not configured. "
+                "Set TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER or provide twilio.* in secrets."
+            )
+        if not self.phone_mapping:
+            raise ConfigurationError("phone_mapping in config.json is empty — нечего прозванивать.")
+
+        allowed_assignees: Optional[set[str]] = None
+        if assignees:
+            allowed_assignees = set()
+            for name in assignees:
+                normalized = self._normalize_assignee_name(name)
+                if normalized:
+                    allowed_assignees.add(normalized)
+            if not allowed_assignees:
+                raise ConfigurationError(
+                    "Не удалось сопоставить указанных исполнителей с phone_mapping. Проверьте написание имён."
+                )
+
+        tasks = self.fetch_pending_tasks(limit=limit)
+        if not tasks:
+            LOGGER.info("Нет задач для голосовых напоминаний.")
+            return []
+
+        grouped: Dict[str, List[ReminderTask]] = {}
+        skipped: List[str] = []
+
+        for task in tasks:
+            normalized = self._normalize_assignee_name(task.assignee)
+            if allowed_assignees is not None and normalized not in allowed_assignees:
+                continue
+
+            phone = self.phone_mapping.get(normalized)
+            if not phone:
+                if task.assignee:
+                    skipped.append(task.assignee)
+                else:
+                    skipped.append(task.task_id)
+                continue
+
+            grouped.setdefault(phone, []).append(task)
+
+        if not grouped:
+            LOGGER.info("Не найдено задач с телефонными номерами для голосовых напоминаний.")
+            if skipped:
+                LOGGER.debug(
+                    "Пропущено %s задач без phone_mapping (пример: %s)",
+                    len(skipped),
+                    ", ".join(sorted(set(skipped))[:3]),
+                )
+            return []
+
+        if skipped:
+            LOGGER.debug(
+                "Пропущено %s задач без phone_mapping (пример: %s)",
+                len(skipped),
+                ", ".join(sorted(set(skipped))[:3]),
+            )
+
+        deliveries: List[Dict[str, Any]] = []
+        for phone, bucket in grouped.items():
+            messages = [self._voice_prompt(task) for task in bucket]
+            result = None
+            if dry_run:
+                LOGGER.info(
+                    "Dry-run: пропущен звонок на %s (задач: %s)",
+                    phone,
+                    len(bucket),
+                )
+            else:
+                result = self.twilio_service.make_call(
+                    from_phone=self.twilio_from_phone,
+                    to_phone=phone,
+                    task_messages=messages,
+                )
+                status = "успех" if result.success else f"ошибка ({result.error or result.status})"
+                LOGGER.info(
+                    "Twilio звонок на %s — %s (задач: %s)",
+                    phone,
+                    status,
+                    len(bucket),
+                )
+
+            deliveries.append(
+                {
+                    "phone": phone,
+                    "assignees": sorted(
+                        {task.assignee for task in bucket if task.assignee and task.assignee != "—"}
+                    )
+                    or ["—"],
+                    "task_ids": [task.task_id for task in bucket],
+                    "call_result": result,
+                    "dry_run": dry_run,
+                }
+            )
+
+        return deliveries
 
     def poll_updates_for(
         self,
