@@ -54,6 +54,7 @@ class ReminderTask:
     due_human: str
     assignee: str
     url: str
+    assignee_id: Optional[str] = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -291,31 +292,37 @@ def _format_due(due_raw: Any, timezone_name: str) -> str:
         return str(due_raw)
 
 
-def _primary_assignee(task: Dict[str, Any]) -> str:
+def _assignee_identity(task: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     assignees = task.get("assignees") or []
     if assignees and isinstance(assignees, list):
         first = assignees[0]
         name = first.get("username") or first.get("email") or first.get("name")
         if name:
-            return str(name)
+            raw_id = first.get("id")
+            assignee_id = str(raw_id).strip() if raw_id is not None else None
+            return str(name), assignee_id or None
+
     watchers = task.get("watchers") or []
     if watchers and isinstance(watchers, list) and len(watchers) == 1:
         creator = task.get("creator") or {}
-        creator_id = str(creator.get("id")) if creator else None
+        creator_id = str(creator.get("id")).strip() if creator and creator.get("id") is not None else None
         for watcher in watchers:
-            watcher_id = str(watcher.get("id")) if watcher.get("id") is not None else None
+            watcher_raw_id = watcher.get("id")
+            watcher_id = str(watcher_raw_id).strip() if watcher_raw_id is not None else None
             if watcher_id and creator_id and watcher_id == creator_id:
                 continue
             name = watcher.get("username") or watcher.get("email") or watcher.get("name")
             if name and name != "ClickBot":
-                return str(name)
+                return str(name), watcher_id
+
     custom_fields = task.get("custom_fields") or []
     for field in custom_fields:
         if isinstance(field, dict) and field.get("name", "").lower() == "assignee":
             value = field.get("value")
             if isinstance(value, str) and value:
-                return value
-    return "—"
+                return value, None
+
+    return "—", None
 
 
 class TelegramReminderService:
@@ -365,7 +372,10 @@ class TelegramReminderService:
             or "Напоминания"
         )
         self.space_ids = self._resolve_space_ids()
-        self.assignee_chat_map = self._build_assignee_chat_map()
+        (
+            self.assignee_chat_map_by_name,
+            self.assignee_chat_map_by_id,
+        ) = self._build_assignee_chat_map()
         self.status_actions = self._build_status_actions()
         self.status_action_map = {action["code"]: action for action in self.status_actions}
         self.status_action_by_key = {action["key"]: action for action in self.status_actions}
@@ -477,13 +487,15 @@ class TelegramReminderService:
             seen.add(normalized)
         return tags
 
-    def _build_assignee_chat_map(self) -> Dict[str, Tuple[str, ...]]:
+    def _build_assignee_chat_map(self) -> Tuple[Dict[str, Tuple[str, ...]], Dict[str, Tuple[str, ...]]]:
         telegram_cfg = self.config.get("telegram") or {}
         mapping_cfg = telegram_cfg.get("assignee_chat_map") or telegram_cfg.get("assignee_chats") or {}
         if not isinstance(mapping_cfg, dict):
-            return {}
+            return {}, {}
 
-        result: Dict[str, Tuple[str, ...]] = {}
+        names_map: Dict[str, Tuple[str, ...]] = {}
+        ids_map: Dict[str, Tuple[str, ...]] = {}
+
         for raw_name, raw_chat_ids in mapping_cfg.items():
             if raw_name is None:
                 continue
@@ -493,13 +505,52 @@ class TelegramReminderService:
             else:
                 name_candidates = [str(raw_name).strip()]
 
+            extra_aliases: List[str] = []
+            explicit_ids: List[str] = []
+            chat_source = raw_chat_ids
+
+            if isinstance(raw_chat_ids, dict):
+                alias_field = raw_chat_ids.get("aliases")
+                if isinstance(alias_field, str):
+                    extra_aliases.extend(part.strip() for part in alias_field.split("|") if part.strip())
+                elif isinstance(alias_field, (list, tuple, set)):
+                    for alias in alias_field:
+                        alias_str = str(alias).strip()
+                        if alias_str:
+                            extra_aliases.append(alias_str)
+
+                id_field = raw_chat_ids.get("ids") or raw_chat_ids.get("assignee_ids") or raw_chat_ids.get("user_ids")
+                if isinstance(id_field, str):
+                    explicit_ids.extend(part.strip() for part in id_field.split("|") if part.strip())
+                elif isinstance(id_field, (list, tuple, set)):
+                    for entry in id_field:
+                        entry_str = str(entry).strip()
+                        if entry_str:
+                            explicit_ids.append(entry_str)
+
+                chat_candidates = (
+                    raw_chat_ids.get("chat_ids")
+                    or raw_chat_ids.get("chats")
+                    or raw_chat_ids.get("telegram_ids")
+                    or raw_chat_ids.get("chat_id")
+                    or raw_chat_ids.get("telegram_id")
+                )
+                if isinstance(chat_candidates, (list, tuple, set)):
+                    chat_source = chat_candidates
+                elif chat_candidates is not None:
+                    chat_source = (chat_candidates,)
+                else:
+                    chat_source = ()
+
+            name_candidates.extend(extra_aliases)
+
             if not name_candidates:
                 continue
 
-            if isinstance(raw_chat_ids, (list, tuple, set)):
-                chat_iterable = raw_chat_ids
+            if isinstance(chat_source, (list, tuple, set)):
+                chat_iterable = chat_source
             else:
-                chat_iterable = (raw_chat_ids,)
+                chat_iterable = (chat_source,)
 
             chats: List[str] = []
             seen_chat: set[str] = set()
@@ -515,11 +566,34 @@ class TelegramReminderService:
 
             chat_tuple = tuple(chats)
             for name in name_candidates:
-                normalized = self._normalize_assignee_name(name)
-                if normalized:
-                    result[normalized] = chat_tuple
+                if not name:
+                    continue
+                token = name.strip()
+                if not token:
+                    continue
+                lowered = token.lower()
+                id_candidate: Optional[str] = None
+                if token.isdigit():
+                    id_candidate = token
+                elif lowered.startswith("id:"):
+                    _, _, suffix = token.partition(":")
+                    candidate = suffix.strip()
+                    if candidate:
+                        id_candidate = candidate
+                if id_candidate:
+                    ids_map[id_candidate] = chat_tuple
+                    continue
 
-        return result
+                normalized = self._normalize_assignee_name(token)
+                if normalized:
+                    names_map[normalized] = chat_tuple
+
+            for identifier in explicit_ids:
+                identifier_str = str(identifier).strip()
+                if identifier_str:
+                    ids_map[identifier_str] = chat_tuple
+
+        return names_map, ids_map
 
     def _build_phone_mapping(self) -> Dict[str, str]:
         """
@@ -673,18 +747,26 @@ class TelegramReminderService:
         return " ".join(normalized.split())
 
     def _chat_targets_for_task(self, task: ReminderTask) -> Tuple[str, ...]:
+        assignee_id = str(task.assignee_id).strip() if task.assignee_id else None
+        if assignee_id:
+            direct_by_id = self.assignee_chat_map_by_id.get(assignee_id)
+            if direct_by_id:
+                return direct_by_id
+
         assignee = self._normalize_assignee_name(task.assignee)
         if not assignee:
             return ()
 
-        direct_mapping = self.assignee_chat_map.get(assignee)
+        direct_mapping = self.assignee_chat_map_by_name.get(assignee)
         if direct_mapping:
             return direct_mapping
 
         if "(" in assignee:
             trimmed = assignee.split("(", 1)[0].strip()
-            if trimmed and trimmed in self.assignee_chat_map:
-                return self.assignee_chat_map[trimmed]
+            if trimmed:
+                normalized_trimmed = self._normalize_assignee_name(trimmed)
+                if normalized_trimmed and normalized_trimmed in self.assignee_chat_map_by_name:
+                    return self.assignee_chat_map_by_name[normalized_trimmed]
 
         return ()
 
@@ -877,13 +959,16 @@ class TelegramReminderService:
             if status_value in self.completed_statuses or status_obj.get("type") == "done":
                 continue
 
+            assignee_name, assignee_id = _assignee_identity(task)
+
             pending.append(
                 ReminderTask(
                     task_id=str(task["id"]),
                     name=str(task.get("name", "Без названия")),
                     status=status_obj.get("status") or status_obj.get("name") or "—",
                     due_human=_format_due(task.get("due_date"), self.timezone_name),
-                    assignee=_primary_assignee(task),
+                    assignee=assignee_name,
+                    assignee_id=assignee_id,
                     url=f"https://app.clickup.com/t/{task['id']}",
                 )
             )
