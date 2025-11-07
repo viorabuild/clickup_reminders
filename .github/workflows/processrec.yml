@@ -33,7 +33,7 @@ jobs:
       CLICKUP_SPACE_IDS: ${{ secrets.CLICKUP_SPACE_IDS }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      CONFIG_PATH: ${{ github.workspace }}/config.json
+      CONFIG_PATH: ${{ github.workspace }}/config.runtime.json
       BASE_DIR: ${{ github.workspace }}
       TZ: 'UTC'
 
@@ -49,6 +49,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Полная история для git
+
+      - name: Prepare config file
+        run: |
+          set -euo pipefail
+          TARGET="${GITHUB_WORKSPACE}/config.runtime.json"
+          if [ -f "${GITHUB_WORKSPACE}/config.json" ]; then
+            echo "Using repo config.json"
+            cp "${GITHUB_WORKSPACE}/config.json" "${TARGET}"
+          elif [ -f "${GITHUB_WORKSPACE}/config.example.json" ]; then
+            echo "Repo config.json missing; falling back to config.example.json"
+            cp "${GITHUB_WORKSPACE}/config.example.json" "${TARGET}"
+          else
+            echo "❌ Neither config.json nor config.example.json found."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
