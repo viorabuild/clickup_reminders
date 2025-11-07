@@ -372,7 +372,10 @@ class TelegramReminderService:
             or "Напоминания"
         )
         self.space_ids = self._resolve_space_ids()
-        self.assignee_chat_map_by_id = self._build_assignee_chat_map()
+        (
+            self.assignee_chat_map_by_id,
+            self.assignee_chat_map_by_name,
+        ) = self._build_assignee_chat_map()
         self.status_actions = self._build_status_actions()
         self.status_action_map = {action["code"]: action for action in self.status_actions}
         self.status_action_by_key = {action["key"]: action for action in self.status_actions}
@@ -392,6 +395,7 @@ class TelegramReminderService:
         self.phone_mapping = self._build_phone_mapping()
         self.twilio_service: Optional[TwilioService] = None
         self.twilio_from_phone: Optional[str] = None
+        self._webhook_cleared = False
         self._init_twilio_service()
 
     @classmethod
@@ -484,13 +488,14 @@ class TelegramReminderService:
             seen.add(normalized)
         return tags
 
-    def _build_assignee_chat_map(self) -> Dict[str, Tuple[str, ...]]:
+    def _build_assignee_chat_map(self) -> Tuple[Dict[str, Tuple[str, ...]], Dict[str, Tuple[str, ...]]]:
         telegram_cfg = self.config.get("telegram") or {}
         mapping_cfg = telegram_cfg.get("assignee_chat_map") or telegram_cfg.get("assignee_chats") or {}
         if not isinstance(mapping_cfg, dict):
-            return {}
+            return {}, {}
 
         ids_map: Dict[str, Tuple[str, ...]] = {}
+        names_map: Dict[str, Tuple[str, ...]] = {}
 
         for raw_name, raw_chat_ids in mapping_cfg.items():
             if raw_name is None:
@@ -561,6 +566,17 @@ class TelegramReminderService:
                 continue
 
             chat_tuple = tuple(chats)
+
+            def store_id(identifier: str) -> None:
+                token = identifier.strip()
+                if token:
+                    ids_map[token] = chat_tuple
+
+            def store_name(alias: str) -> None:
+                normalized = self._normalize_assignee_name(alias)
+                if normalized:
+                    names_map[normalized] = chat_tuple
+
             for name in name_candidates:
                 if not name:
                     continue
@@ -577,14 +593,23 @@ class TelegramReminderService:
                     if candidate:
                         id_candidate = candidate
                 if id_candidate:
-                    ids_map[id_candidate] = chat_tuple
+                    store_id(id_candidate)
+                elif token:
+                    store_name(token)
 
             for identifier in explicit_ids:
                 identifier_str = str(identifier).strip()
-                if identifier_str:
-                    ids_map[identifier_str] = chat_tuple
+                if not identifier_str:
+                    continue
+                if identifier_str.isdigit():
+                    store_id(identifier_str)
+                elif identifier_str.lower().startswith("id:"):
+                    _, _, suffix = identifier_str.partition(":")
+                    store_id(suffix.strip())
+                else:
+                    store_name(identifier_str)
 
-        return ids_map
+        return ids_map, names_map
 
     def _build_phone_mapping(self) -> Dict[str, str]:
         """
@@ -730,6 +755,16 @@ class TelegramReminderService:
             self.default_chat_id = chat_id
             self._persist_chat_id(chat_id)
 
+    def _ensure_webhook_cleared(self) -> None:
+        if self._webhook_cleared:
+            return
+        try:
+            self._telegram_post("deleteWebhook", {"drop_pending_updates": False})
+        except Exception as exc:  # pragma: no cover - network guard
+            LOGGER.warning("Failed to delete Telegram webhook before polling: %s", exc)
+        else:
+            self._webhook_cleared = True
+
     @staticmethod
     def _normalize_assignee_name(name: str) -> str:
         normalized = str(name or "").strip().lower()
@@ -743,6 +778,12 @@ class TelegramReminderService:
             direct_by_id = self.assignee_chat_map_by_id.get(assignee_id)
             if direct_by_id:
                 return direct_by_id
+
+        normalized_name = self._normalize_assignee_name(task.assignee)
+        if normalized_name:
+            direct_by_name = self.assignee_chat_map_by_name.get(normalized_name)
+            if direct_by_name:
+                return direct_by_name
 
         return ()
 
@@ -1278,6 +1319,8 @@ class TelegramReminderService:
         """
         if duration <= 0:
             return 0
+
+        self._ensure_webhook_cleared()
 
         deadline = time.monotonic() + duration
         offset: Optional[int] = None

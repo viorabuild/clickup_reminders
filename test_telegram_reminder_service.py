@@ -284,6 +284,36 @@ class TelegramReminderServiceTest(unittest.TestCase):
         self.assertNotIn("Task Unknown", " ".join("\n".join(messages) for messages in messages_by_chat.values()))
 
     @patch("telegram_reminder_service.ClickUpClient")
+    def test_send_reminders_uses_name_mapping_when_id_missing(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        config = {
+            "clickup": self.config["clickup"],
+            "working_hours": self.config["working_hours"],
+            "telegram": {"assignee_chat_map": {"Марьяна|Mariana": "chat-mariana"}},
+        }
+
+        service = TelegramReminderService(config, self.credentials, session=session)
+        tasks = [
+            ReminderTask(
+                task_id="777",
+                name="Task Mariana",
+                status="todo",
+                due_human="2024-01-05 10:00",
+                assignee="Марьяна",
+                url="url-777",
+            )
+        ]
+
+        with patch.object(service, "fetch_pending_tasks", return_value=tasks):
+            service.send_reminders()
+
+        messages = [call["json"] for call in session.calls if call["url"].endswith("sendMessage")]
+        mariana_messages = [msg for msg in messages if msg["chat_id"] == "chat-mariana"]
+        self.assertEqual(2, len(mariana_messages))
+        self.assertTrue(any("Task Mariana" in msg["text"] for msg in mariana_messages))
+
+    @patch("telegram_reminder_service.ClickUpClient")
     def test_send_reminders_broadcast_all_when_overridden(self, mock_client_cls):
         mock_client_cls.return_value = MagicMock()
         session = DummySession()
@@ -526,6 +556,20 @@ class TelegramReminderServiceTest(unittest.TestCase):
         get_updates.assert_called_once()
         handle_callback.assert_called_once()
         handle_message.assert_not_called()
+
+    @patch("telegram_reminder_service.ClickUpClient")
+    def test_poll_updates_clears_webhook_once(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        service = TelegramReminderService(self.config, self.credentials, session=DummySession())
+
+        with patch.object(service, "_telegram_post", return_value={"ok": True}) as telegram_post, patch.object(
+            service, "get_updates", return_value=[]
+        ):
+            service.poll_updates_for(duration=0.1, poll_interval=0.01)
+            service.poll_updates_for(duration=0.1, poll_interval=0.01)
+
+        delete_calls = [call for call in telegram_post.call_args_list if call[0][0] == "deleteWebhook"]
+        self.assertEqual(1, len(delete_calls))
 
 
 if __name__ == "__main__":
