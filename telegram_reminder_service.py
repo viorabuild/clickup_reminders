@@ -1064,8 +1064,9 @@ class TelegramReminderService:
             chat_ids = self._chat_targets_for_task(task)
             if not chat_ids:
                 LOGGER.warning(
-                    "No Telegram chat mapping for assignee '%s' (task %s). Skipping.",
-                    task.assignee,
+                    "No Telegram chat mapping for assignee '%s' (id=%s, task %s). Skipping.",
+                    task.assignee or "—",
+                    task.assignee_id or "—",
                     task.task_id,
                 )
                 continue
