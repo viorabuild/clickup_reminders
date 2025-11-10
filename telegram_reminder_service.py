@@ -1703,7 +1703,10 @@ class TelegramReminderService:
             current_due = None
 
         now = datetime.now(timezone)
-        base_due = current_due if current_due and current_due > now else now
+        if current_due:
+            base_due = current_due
+        else:
+            base_due = now
         new_due = base_due + timedelta(hours=postpone_hours)
         new_due_ms = int(new_due.timestamp() * 1000)
 
