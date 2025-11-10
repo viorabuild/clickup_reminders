@@ -103,6 +103,17 @@ class ClickUpClient:
         )
         response.raise_for_status()
 
+    def update_task(self, task_id: str, payload: Dict[str, Any]) -> None:
+        """Update arbitrary fields of a ClickUp task."""
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("payload must be a non-empty dict")
+
+        response = self.session.put(
+            f"{self.BASE_URL}/task/{task_id}",
+            json=payload,
+        )
+        response.raise_for_status()
+
     def add_comment(self, task_id: str, comment_text: str) -> None:
         """Attach a comment to the task if needed."""
         response = self.session.post(
