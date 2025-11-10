@@ -1541,11 +1541,6 @@ class TelegramReminderService:
                     f" <b>{hours_display}</b> ч. Новый срок: <b>{due_formatted}</b>"
                 ),
             )
-        else:
-            self.send_plain_message(
-                chat_id,
-                f"✅ Задача <b>{task_name}</b> отмечена как: <b>{status_key}</b>",
-            )
 
 
     def _postpone_task_due_date(
