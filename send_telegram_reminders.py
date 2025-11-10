@@ -44,7 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--final-poll-seconds",
         type=float,
-        default=10.0,
+        default=30.0,
         help=(
             "Extra polling window (seconds) after the main run to wait for user actions "
             "before exiting. Pass 0 to disable the final wait."
