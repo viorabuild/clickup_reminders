@@ -689,6 +689,7 @@ class TelegramReminderService:
                         continue
                     text = key.title()
                     code = self._generate_action_code(idx, used_codes)
+                    action: Dict[str, Any] = {"code": code, "key": key, "text": text}
                 elif isinstance(entry, dict):
                     key = str(
                         entry.get("key")
@@ -709,9 +710,19 @@ class TelegramReminderService:
                             used_codes.add(code)
                     else:
                         code = self._generate_action_code(idx, used_codes)
+
+                    action = dict(entry)
+                    action["code"] = code
+                    action["key"] = key
+                    action["text"] = text
                 else:
                     continue
-                actions.append({"code": code, "key": key, "text": text})
+
+                # Ensure callbacks always have minimal required fields
+                if "code" not in action or "key" not in action or "text" not in action:
+                    continue
+
+                actions.append(action)
 
         if not actions:
             actions = [
