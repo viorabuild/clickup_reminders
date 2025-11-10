@@ -61,7 +61,7 @@ jobs:
           TARGET="${GITHUB_WORKSPACE}/config.runtime.json"
           if [ -n "${CONFIG_JSON:-}" ]; then
             echo "Using CONFIG_JSON secret"
-            python -c "import json, os; data=json.loads(os.environ['CONFIG_JSON']); path=os.environ['CONFIG_PATH'];\nwith open(path, 'w', encoding='utf-8') as fh: json.dump(data, fh, ensure_ascii=False, indent=2)"
+            python -c "import json, os, pathlib; data=json.loads(os.environ['CONFIG_JSON']); path=os.environ['CONFIG_PATH']; pathlib.Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')"
           elif [ -f "${GITHUB_WORKSPACE}/config.json" ]; then
             echo "Using repo config.json"
             cp "${GITHUB_WORKSPACE}/config.json" "${TARGET}"
