@@ -528,9 +528,25 @@ class TelegramReminderService:
         if channel == "telegram":
             return True
         if channel == "twilio":
-            normalized = self._normalize_assignee_name(task.assignee)
-            return bool(normalized and normalized in self.phone_mapping)
+            recipient = self._resolve_twilio_recipient(task)
+            return bool(recipient and recipient in self.phone_mapping)
         return False
+
+    def _resolve_twilio_recipient(self, task: ReminderTask) -> Optional[str]:
+        normalized = self._normalize_assignee_name(task.assignee)
+        if normalized and normalized in self.phone_mapping:
+            return normalized
+
+        description = task.description or ""
+        if isinstance(description, str) and description:
+            lowered = description.lower()
+            for alias in self.phone_mapping.keys():
+                if alias and alias in lowered:
+                    return alias
+            for alias in ("alex", "алекс"):
+                if alias in lowered and alias in self.phone_mapping:
+                    return alias
+        return None
 
     def _build_completed_statuses(self) -> set[str]:
         statuses = {self.status_mapping.get("ВЫПОЛНЕНО", "complete").lower()}
