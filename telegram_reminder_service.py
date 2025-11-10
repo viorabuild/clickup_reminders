@@ -144,6 +144,7 @@ def load_runtime_credentials(config: Dict[str, Any]) -> Dict[str, Any]:
         "twilio_account_sid": os.getenv("TWILIO_ACCOUNT_SID"),
         "twilio_auth_token": os.getenv("TWILIO_AUTH_TOKEN"),
         "twilio_phone_number": os.getenv("TWILIO_PHONE_NUMBER"),
+        "twilio_to_alex": os.getenv("TWILIO_TO_ALEX"),
     }
 
     team_ids: List[str] = []
@@ -235,6 +236,10 @@ def load_runtime_credentials(config: Dict[str, Any]) -> Dict[str, Any]:
             "twilio_phone_number": (
                 ("twilio", "phone_number"),
                 ("twilio", "secrets", "phone_number"),
+            ),
+            "twilio_to_alex": (
+                ("twilio", "to_alex"),
+                ("twilio", "secrets", "to_alex"),
             ),
         }
         for key, paths in secret_mappings.items():
@@ -394,6 +399,7 @@ class TelegramReminderService:
         self.callback_log_path = self._resolve_callback_log_path()
         self._processed_callback_ids: set[str] = self._load_processed_callback_ids()
         self.phone_mapping = self._build_phone_mapping()
+        self._apply_phone_overrides()
         self.channel_preferences = self._build_channel_preferences()
         self.twilio_service: Optional[TwilioService] = None
         self.twilio_from_phone: Optional[str] = None
@@ -455,6 +461,16 @@ class TelegramReminderService:
         mapping.setdefault("НА_ДОРАБОТКЕ", clickup_section.get("callback_status", "на доработке"))
         mapping.setdefault("ОТМЕНЕНА", clickup_section.get("cancelled_status", "отменена"))
         return mapping
+
+    def _apply_phone_overrides(self) -> None:
+        override_alex = str(self.credentials.get("twilio_to_alex") or "").strip()
+        if not override_alex:
+            return
+
+        for alias in ("alex", "алекс"):
+            normalized_alias = self._normalize_assignee_name(alias)
+            if normalized_alias:
+                self.phone_mapping[normalized_alias] = override_alex
 
     def _build_channel_preferences(self) -> Dict[str, Tuple[str, ...]]:
         telegram_cfg = self.config.get("telegram") or {}
