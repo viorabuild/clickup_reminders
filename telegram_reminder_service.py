@@ -537,12 +537,15 @@ class TelegramReminderService:
         if normalized and normalized in self.phone_mapping:
             return normalized
 
+        # If assignee is empty or "—", always check description
         description = task.description or ""
         if isinstance(description, str) and description:
             lowered = description.lower()
+            # First try all phone_mapping aliases
             for alias in self.phone_mapping.keys():
                 if alias and alias in lowered:
                     return alias
+            # Then try common names
             for alias in ("alex", "алекс"):
                 if alias in lowered and alias in self.phone_mapping:
                     return alias
