@@ -1545,6 +1545,7 @@ class TelegramReminderService:
 
         payload = self.fetch_task_details(task_id)
         due_raw = payload.get("due_date")
+        due_time_raw = payload.get("due_date_time")
         timezone_name = self.timezone_name or "UTC"
         timezone = pytz.timezone(timezone_name)
 
@@ -1562,7 +1563,19 @@ class TelegramReminderService:
         new_due = base_due + timedelta(hours=postpone_hours)
         new_due_ms = int(new_due.timestamp() * 1000)
 
-        self.clickup_client.update_task(task_id, {"due_date": new_due_ms})
+        has_due_time = False
+        if isinstance(due_time_raw, bool):
+            has_due_time = due_time_raw
+        elif isinstance(due_time_raw, (int, float)):
+            has_due_time = bool(due_time_raw)
+        elif isinstance(due_time_raw, str):
+            has_due_time = due_time_raw not in {"0", "false", "False", ""}
+
+        update_payload: Dict[str, Any] = {"due_date": new_due_ms}
+        if has_due_time or current_due:
+            update_payload["due_date_time"] = True
+
+        self.clickup_client.update_task(task_id, update_payload)
 
         try:
             self.clickup_client.add_comment(
