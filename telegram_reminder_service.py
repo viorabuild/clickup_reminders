@@ -1810,7 +1810,11 @@ class TelegramReminderService:
                 "status": getattr(result, "status", "unknown"),
                 "sid": getattr(result, "sid", None),
             }
-            deliveries.append({"assignees": [task.assignee for task in bucket], "call_result": call_result})
+            deliveries.append({
+                "phone": phone,
+                "assignees": [task.assignee for task in bucket],
+                "call_result": call_result,
+            })
             attempted_calls += 1
             if not call_result["success"]:
                 LOGGER.warning(
@@ -2106,6 +2110,13 @@ class TelegramReminderService:
                 (
                     f"⏱ Перенос выполнен! Задача <b>{task_name}</b> перенесена ещё на"
                     f" <b>{hours_display}</b> ч. Новый срок: <b>{due_formatted}</b>"
+                ),
+            )
+        else:
+            self.send_plain_message(
+                chat_id,
+                (
+                    f"✅ Статус обновлён: <b>{task_name}</b> теперь <b>{status_key}</b>."
                 ),
             )
 
