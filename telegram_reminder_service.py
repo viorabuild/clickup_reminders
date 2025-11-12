@@ -432,7 +432,7 @@ class TelegramReminderService:
         self.status_actions = self._build_status_actions()
         self.status_action_map = {action["code"]: action for action in self.status_actions}
         self.status_action_by_key = {action["key"]: action for action in self.status_actions}
-        self.chat_shortcuts = self._build_chat_shortcuts()
+        self.chat_shortcuts = []
         for action in self.status_actions:
             if action["key"] not in self.status_mapping:
                 normalized = action["key"].replace("_", " ").lower()
@@ -988,45 +988,7 @@ class TelegramReminderService:
         )
 
     def _build_chat_shortcuts(self) -> List[Dict[str, str]]:
-        telegram_cfg = self.config.get("telegram") or {}
-        raw_shortcuts = telegram_cfg.get("chat_shortcuts")
-        if not isinstance(raw_shortcuts, list):
-            return []
-
-        shortcuts: List[Dict[str, str]] = []
-        for entry in raw_shortcuts:
-            if not isinstance(entry, dict):
-                continue
-
-            text = str(entry.get("text") or "").strip()
-            if not text:
-                continue
-
-            shortcut_type = str(entry.get("type") or "").strip().lower()
-            url = str(entry.get("url") or "").strip()
-
-            if shortcut_type in {"group_chat", "group"}:
-                candidate_url = url or self.group_chat_url
-                if not candidate_url:
-                    LOGGER.warning("Chat shortcut '%s' skipped: no group chat URL configured.", text)
-                    continue
-                url = candidate_url
-            elif shortcut_type in {"url", "link"}:
-                if not url:
-                    LOGGER.warning("Chat shortcut '%s' skipped: URL is missing.", text)
-                    continue
-            else:
-                if not url:
-                    LOGGER.warning(
-                        "Chat shortcut '%s' skipped: unsupported type '%s' without URL.",
-                        text,
-                        shortcut_type or "",
-                    )
-                    continue
-
-            shortcuts.append({"text": text, "url": url})
-
-        return shortcuts
+        return []
 
     def _register_user_action(self, entry: str) -> None:
         if not entry:
