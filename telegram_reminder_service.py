@@ -404,13 +404,13 @@ class TelegramReminderService:
             {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}},
         )
 
-    def answer_callback(self, callback_id: str, text: str, show_alert: bool = False) -> None:
+    def answer_callback(self, callback_id: str, text: str, show_alert: bool = False) -> Dict[str, Any]:
         payload = {"callback_query_id": callback_id}
         if text:
             payload["text"] = text
         if show_alert:
             payload["show_alert"] = True
-        self._telegram_post("answerCallbackQuery", payload)
+        return self._telegram_post("answerCallbackQuery", payload)
 
     def send_reminders(self, chat_id: Optional[str] = None, limit: Optional[int] = None) -> List[ReminderTask]:
         target_chat = self._resolve_target_chat(chat_id)
@@ -497,11 +497,46 @@ class TelegramReminderService:
             self.default_chat_id = chat_id
             self._persist_chat_id(chat_id)
 
+        callback_acknowledged = False
+
+        if callback_id:
+            try:
+                ack_result = self.answer_callback(callback_id, "")
+            except Exception as exc:  # pragma: no cover - network guard
+                LOGGER.debug(
+                    "Failed to acknowledge callback %s before updating task %s: %s",
+                    callback_id,
+                    task_id,
+                    exc,
+                )
+                if chat_id:
+                    self.send_plain_message(
+                        chat_id,
+                        "⚠️ Действие устарело. Отправьте /start, чтобы получить актуальные задачи.",
+                    )
+                return
+
+            callback_acknowledged = True
+
+            if not ack_result.get("ok", False):
+                LOGGER.warning(
+                    "Telegram rejected callback %s for task %s: %s",
+                    callback_id,
+                    task_id,
+                    ack_result,
+                )
+                if chat_id:
+                    self.send_plain_message(
+                        chat_id,
+                        "⚠️ Действие устарело. Отправьте /start, чтобы получить актуальные задачи.",
+                    )
+                return
+
         try:
             self.update_clickup_status(task_id, status_key)
         except Exception as exc:
             LOGGER.error("Failed to update task %s status: %s", task_id, exc)
-            if callback_id:
+            if callback_id and not callback_acknowledged:
                 try:
                     self.answer_callback(
                         callback_id,
@@ -530,11 +565,6 @@ class TelegramReminderService:
             LOGGER.warning("No chat id available to notify about task %s update", task_id)
             return
 
-        if callback_id:
-            try:
-                self.answer_callback(callback_id, "Готово!")
-            except Exception as exc:  # pragma: no cover - network guard
-                LOGGER.debug("Failed to send callback ack for task %s: %s", task_id, exc)
         task_payload = self.fetch_task_details(task_id)
         task_name = task_payload.get("name", f"Задача {task_id}")
         self.send_plain_message(
