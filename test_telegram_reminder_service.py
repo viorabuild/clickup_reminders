@@ -359,6 +359,51 @@ class TelegramReminderServiceTest(unittest.TestCase):
         self.assertNotIn("Task Unknown", combined_text)
 
     @patch("telegram_reminder_service.ClickUpClient")
+    def test_send_reminders_override_without_mapping_uses_fallback(self, mock_client_cls):
+        mock_client_cls.return_value = MagicMock()
+        session = DummySession()
+        config = {
+            "clickup": {
+                "status_mapping": {
+                    "ВЫПОЛНЕНО": "complete",
+                    "НЕ_ВЫПОЛНЕНО": "todo",
+                    "В_РАБОТЕ": "in progress",
+                },
+                "completed_status": "complete",
+            },
+            "working_hours": {"timezone": "Europe/Lisbon"},
+        }
+        credentials = {
+            "clickup_api_key": "key",
+            "clickup_team_id": "123",
+            "telegram_bot_token": "token",
+            "telegram_chat_id": "fallback-chat",
+        }
+
+        service = TelegramReminderService(config, credentials, session=session)
+        tasks = [
+            ReminderTask(
+                task_id="1",
+                name="Task Without Mapping",
+                status="todo",
+                due_human="2024-01-01 10:00",
+                assignee="",
+                url="url-1",
+            ),
+        ]
+
+        with patch.object(service, "fetch_pending_tasks", return_value=tasks):
+            service.send_reminders(chat_id="custom-chat")
+
+        send_calls = [call for call in session.calls if call["url"].endswith("sendMessage")]
+        self.assertTrue(send_calls)
+        payloads = [call["json"] for call in send_calls if call["json"]["chat_id"] == "custom-chat"]
+        self.assertTrue(payloads)
+
+        combined_text = " ".join(payload["text"] for payload in payloads)
+        self.assertIn("Task Without Mapping", combined_text)
+
+    @patch("telegram_reminder_service.ClickUpClient")
     def test_fetch_pending_tasks_multiple_team_ids(self, mock_client_cls):
         client_a = MagicMock()
         client_b = MagicMock()

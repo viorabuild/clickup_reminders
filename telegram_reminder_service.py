@@ -988,9 +988,31 @@ class TelegramReminderService:
             target_chat_str = str(target_chat)
             deliveries = self._group_tasks_by_chat(tasks, fallback_chat=None)
             bucket = deliveries.get(target_chat_str, [])
+            fallback_tasks: Optional[List[ReminderTask]] = None
 
-            if not bucket and self.default_chat_id and str(self.default_chat_id) == target_chat_str:
-                bucket = [task for task in tasks if not self._chat_targets_for_task(task)]
+            if not bucket:
+                mapped_chats: set[str] = {
+                    chat
+                    for chat_tuple in self.assignee_chat_map.values()
+                    for chat in chat_tuple
+                }
+                if target_chat_str not in mapped_chats:
+                    fallback_tasks = [
+                        task for task in tasks if not self._chat_targets_for_task(task)
+                    ]
+                    if fallback_tasks:
+                        bucket = fallback_tasks
+
+            if (
+                not bucket
+                and self.default_chat_id
+                and str(self.default_chat_id) == target_chat_str
+            ):
+                if fallback_tasks is None:
+                    fallback_tasks = [
+                        task for task in tasks if not self._chat_targets_for_task(task)
+                    ]
+                bucket = fallback_tasks
 
             self._dispatch_tasks_to_chat(target_chat_str, bucket)
             return tasks
